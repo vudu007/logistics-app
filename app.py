@@ -10,24 +10,24 @@ import urllib.parse
 import pandas as pd
 from io import BytesIO
 import random
-from sqlalchemy import inspect, text # Added for auto-migration logic
 
 app = Flask(__name__)
-# IMPORTANT: On Render, set this via Environment Variable. Fallback provided for local.
+# On Render, use the Secret Key env variable, otherwise use dev key
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-secret')
 
-# --- DATABASE CONFIGURATION ---
+# --- DATABASE CONFIGURATION (Hybrid: Cloud + Local) ---
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
+# Check if running on Render (Cloud)
 database_url = os.environ.get('DATABASE_URL')
 
 if database_url:
-    # Fix Render's postgres URL format if needed
+    # Fix Render's postgres URL format
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 else:
-    # Local SQLite
+    # We are Local -> Use SQLite
     DB_NAME = 'logistics_prod.db'
     DB_PATH = os.path.join(BASE_DIR, DB_NAME)
     app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DB_PATH}'
@@ -75,7 +75,7 @@ class Driver(db.Model):
 class Truck(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    capacity_tons = db.Column(db.Float, nullable=False, default=0.0)
+    capacity_tons = db.Column(db.Float, nullable=False, default=0.0) # Pallets
     trip_count = db.Column(db.Integer, default=0)
     status = db.Column(db.String(50), default='Active') 
     
@@ -104,7 +104,7 @@ class Schedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     start_time = db.Column(db.DateTime, nullable=False)
     end_time = db.Column(db.DateTime, nullable=False)
-    load_weight = db.Column(db.Float, nullable=False, default=0.0)
+    load_weight = db.Column(db.Float, nullable=False, default=0.0) # Pallets
     status = db.Column(db.String(20), default='Scheduled')
     trip_type = db.Column(db.String(50), default='Direct')
     
@@ -129,11 +129,11 @@ class Maintenance(db.Model):
 def load_user(user_id):
     return db.session.get(User, int(user_id))
 
-# --- IMPORTANT: CREATE TABLES ON STARTUP (For Render/Gunicorn) ---
+# --- IMPORTANT: CREATE TABLES ON STARTUP (Fixes Render 500 Error) ---
 with app.app_context():
     db.create_all()
 
-# --- HELPERS ---
+# --- HELPER: CONSTRAINT CHECKER ---
 def check_compatibility(truck, store):
     if truck.is_low and store.high_dock: return False, f"{truck.name} is too LOW for {store.name}."
     if truck.is_large and store.small_gate: return False, f"{truck.name} is too BIG for {store.name}."
@@ -195,6 +195,7 @@ def download_job_template():
     data = []
     for s in stores:
         data.append({'Store': s.name, 'Address': s.address, 'Pallets': ''})
+    
     df = pd.DataFrame(data)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -244,6 +245,7 @@ def upload_job_manifest():
             return redirect(url_for('schedule_truck'))
 
         flash(f"Loaded {len(preview_jobs)} jobs.")
+        
         trucks = Truck.query.filter_by(status='Active').order_by(Truck.trip_count).all()
         stores = Store.query.all()
         active_drivers = Driver.query.filter_by(status='Active').count()
@@ -269,7 +271,6 @@ def schedule_truck():
             if schedule_type == 'bulk':
                 store_ids = request.form.getlist('store_ids[]')
                 volumes = request.form.getlist('volumes[]')
-                
                 valid_trucks = [t for t in trucks if t.capacity_tons > 0 and t.assigned_driver_id]
                 if not valid_trucks: 
                     flash("No active trucks with drivers available.")
@@ -289,27 +290,19 @@ def schedule_truck():
                 for order in orders:
                     store = order['store']
                     remaining = order['volume']
-                    
                     compatible = [t for t in valid_trucks if check_compatibility(t, store)[0]]
-                    if not compatible: 
-                        flash(f"Skipped {store.name}: No compatible trucks.")
-                        continue
+                    if not compatible: flash(f"Skipped {store.name}: No compatible trucks."); continue
 
                     while remaining > 0:
                         truck = compatible[truck_idx % len(compatible)]
                         driver = truck.assigned_driver
-                        
-                        if not driver or driver.status != 'Active':
-                            truck_idx += 1; continue
+                        if not driver or driver.status != 'Active': truck_idx += 1; continue
 
                         if remaining >= (truck.capacity_tons * 0.8):
                             load = min(remaining, truck.capacity_tons)
                             travel_hrs = (store.distance_km / 30) + 1
                             db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
-                            
-                            truck.trip_count += 1
-                            driver.trip_count += 1
-                            truck_idx += 1; trips_generated += 1
+                            truck.trip_count += 1; driver.trip_count += 1; truck_idx += 1; trips_generated += 1
                             remaining -= load
                         else:
                             partials.append({'store': store, 'volume': remaining})
@@ -334,17 +327,13 @@ def schedule_truck():
                     for p in partials[:]:
                         if check_compatibility(truck, p['store'])[0] and (current_load + p['volume'] <= truck.capacity_tons):
                             if abs(p['store'].distance_km - base['store'].distance_km) <= 10:
-                                current_orders.append(p)
-                                current_load += p['volume']
-                                partials.remove(p)
+                                current_orders.append(p); current_load += p['volume']; partials.remove(p)
                     
                     for p in current_orders:
                         travel_hrs = (p['store'].distance_km / 30) + 2
                         db.session.add(Schedule(truck_id=truck.id, store_id=p['store'].id, driver_id=driver.id, load_weight=p['volume'], start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Merged'))
                     
-                    truck.trip_count += 1
-                    driver.trip_count += 1
-                    trips_generated += 1
+                    truck.trip_count += 1; driver.trip_count += 1; trips_generated += 1
 
                 db.session.commit()
                 flash(f'Auto-Plan: {trips_generated} trips generated.')
@@ -355,13 +344,11 @@ def schedule_truck():
                 store = db.session.get(Store, int(request.form.get('store_id')))
                 load = float(request.form.get('load_weight'))
                 truck_id_input = request.form.get('truck_id')
-                
                 truck = None
+                
                 if truck_id_input == 'auto':
                     suitable = [t for t in trucks if check_compatibility(t, store)[0] and t.capacity_tons >= load]
-                    if not suitable:
-                        flash("Auto-Select Failed: No compatible active truck fits load.")
-                        return redirect(url_for('schedule_truck'))
+                    if not suitable: flash("No truck fits."); return redirect(url_for('schedule_truck'))
                     truck = suitable[0]
                 else:
                     truck = db.session.get(Truck, int(truck_id_input))
@@ -369,16 +356,12 @@ def schedule_truck():
                     if not check_compatibility(truck, store)[0]: flash("Constraint Error"); return redirect(url_for('schedule_truck'))
 
                 if load > truck.capacity_tons: flash("Overload!"); return redirect(url_for('schedule_truck'))
-
                 driver = truck.assigned_driver
-                if not driver or driver.status != 'Active':
-                    flash("Truck has no active driver.")
-                    return redirect(url_for('schedule_truck'))
+                if not driver or driver.status != 'Active': flash("Truck has no active driver"); return redirect(url_for('schedule_truck'))
 
                 travel_hrs = (store.distance_km / 30) + 1
-                db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
-                truck.trip_count += 1
-                driver.trip_count += 1
+                db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time+timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
+                truck.trip_count += 1; driver.trip_count += 1
                 db.session.commit()
                 return redirect(url_for('dashboard'))
 
@@ -404,7 +387,7 @@ def export_report():
     out = BytesIO(); pd.DataFrame(data).to_excel(out, index=False); out.seek(0)
     return send_file(out, download_name="trip_report.xlsx", as_attachment=True)
 
-# --- API ---
+# --- API FOR CALENDAR ---
 @app.route('/api/get_trips_by_date/<date_str>')
 @login_required
 def get_trips_by_date(date_str):
@@ -583,7 +566,7 @@ def import_stores():
             df = pd.read_excel(f); df.columns = df.columns.str.strip().str.lower()
             for _, r in df.iterrows():
                 n = str(r.get('name',''))
-                if n and n!='nan' and not Store.query.filter_by(name=str(r.get('name'))).first():
+                if n and n!='nan' and not Store.query.filter_by(name=n).first():
                     def pb(v): return str(v).lower() in ['yes', 'y', 'true', '1']
                     db.session.add(Store(name=n, address=str(r.get('address', '')), distance_km=float(r.get('distance', 10)), high_dock=pb(r.get('high dock', False)), small_gate=pb(r.get('small gate', False)), low_wires=pb(r.get('low wires', False)), user_id=current_user.id))
             db.session.commit(); flash('Imported.')
