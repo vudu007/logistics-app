@@ -1,0 +1,14 @@
+web: gunicorn app:app```
+
+**3. Push and Redeploy**
+1.  Run these commands in your **PowerShell** (if you haven't already):
+    ```powershell
+    git add .
+    git commit -m "Final fixes and updated requirements"
+    git push
+    ```
+2.  Go to your **Render Dashboard**.
+3.  Click on your **`logistics-pro`** Web Service.
+4.  Click **"Manually Deploy New Version"** or check the **"Auto-Deploy"** setting to see if it triggered automatically.
+
+The error you saw (`Internal Server Error` on the live site) means Render is running the build command, but Python is crashing when trying to initialize Flask/SQLAlchemy. The hybrid database config in `app.py` should automatically select PostgreSQL when it sees the `DATABASE_URL` environment variable provided by Render, which requires `psycopg2-binary` to be present in your `requirements.txt`.

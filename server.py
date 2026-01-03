@@ -1,11 +1,10 @@
-import os
-import shutil
-import time
-from datetime import datetime
 from waitress import serve
 from app import app, db
 import webbrowser
 from threading import Timer
+import os
+import shutil # Added import
+from datetime import datetime # Added import
 
 # --- CONFIGURATION ---
 DB_FILENAME = 'logistics_prod.db'
@@ -24,12 +23,11 @@ def create_backup(event_type):
     if os.path.exists(DB_FILENAME):
         # 3. Create formatted filename (e.g., logistics_STARTUP_2025-01-03_14-30.db)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        backup_name = f"logistics_{event_type}_{timestamp}.db"
-        destination = os.path.join(BACKUP_FOLDER, backup_name)
+        destination = os.path.join(os.path.abspath(os.path.dirname(__file__)), BACKUP_FOLDER, f"logistics_{event_type}_{timestamp}.db")
 
         try:
             shutil.copy2(DB_FILENAME, destination)
-            print(f"[{event_type}] Backup successful: {backup_name}")
+            print(f"[{event_type}] Backup successful: {os.path.basename(destination)}")
         except Exception as e:
             print(f"[{event_type}] Backup FAILED: {e}")
     else:
