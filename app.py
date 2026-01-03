@@ -15,14 +15,14 @@ app = Flask(__name__)
 # On Render, use the Secret Key env variable, otherwise use dev key
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-secret')
 
-# --- DATABASE CONFIGURATION (Hybrid: Cloud + Local) ---
+# --- DATABASE CONFIGURATION (Hybrid: Local vs Cloud) ---
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 # Check if running on Render (Cloud)
 database_url = os.environ.get('DATABASE_URL')
 
 if database_url:
-    # Fix Render's postgres URL format
+    # Fix Render's postgres URL format if needed
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
@@ -195,7 +195,6 @@ def download_job_template():
     data = []
     for s in stores:
         data.append({'Store': s.name, 'Address': s.address, 'Pallets': ''})
-    
     df = pd.DataFrame(data)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -238,7 +237,12 @@ def upload_job_manifest():
 
             match = next((s for s in all_stores if s.name.lower() == excel_name), None)
             if match:
-                preview_jobs.append({'store_id': match.id, 'store_name': match.name, 'store_address': match.address, 'volume': int(pallets)})
+                preview_jobs.append({
+                    'store_id': match.id,
+                    'store_name': match.name,
+                    'store_address': match.address,
+                    'volume': int(pallets)
+                })
         
         if not preview_jobs:
             flash("No matching stores found.")
@@ -261,7 +265,6 @@ def upload_job_manifest():
 def schedule_truck():
     trucks = Truck.query.filter_by(status='Active').order_by(Truck.trip_count).all()
     stores = Store.query.all()
-    active_drivers = Driver.query.filter_by(status='Active').order_by(Driver.trip_count).all()
     
     if request.method == 'POST':
         try:
@@ -271,6 +274,7 @@ def schedule_truck():
             if schedule_type == 'bulk':
                 store_ids = request.form.getlist('store_ids[]')
                 volumes = request.form.getlist('volumes[]')
+                
                 valid_trucks = [t for t in trucks if t.capacity_tons > 0 and t.assigned_driver_id]
                 if not valid_trucks: 
                     flash("No active trucks with drivers available.")
@@ -290,25 +294,33 @@ def schedule_truck():
                 for order in orders:
                     store = order['store']
                     remaining = order['volume']
+                    
                     compatible = [t for t in valid_trucks if check_compatibility(t, store)[0]]
-                    if not compatible: flash(f"Skipped {store.name}: No compatible trucks."); continue
+                    if not compatible: 
+                        flash(f"Skipped {store.name}: No compatible trucks.")
+                        continue
 
                     while remaining > 0:
                         truck = compatible[truck_idx % len(compatible)]
                         driver = truck.assigned_driver
-                        if not driver or driver.status != 'Active': truck_idx += 1; continue
+                        
+                        if not driver or driver.status != 'Active':
+                            truck_idx += 1; continue
 
                         if remaining >= (truck.capacity_tons * 0.8):
                             load = min(remaining, truck.capacity_tons)
                             travel_hrs = (store.distance_km / 30) + 1
                             db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
-                            truck.trip_count += 1; driver.trip_count += 1; truck_idx += 1; trips_generated += 1
+                            
+                            truck.trip_count += 1
+                            driver.trip_count += 1
+                            truck_idx += 1; trips_generated += 1
                             remaining -= load
                         else:
                             partials.append({'store': store, 'volume': remaining})
                             remaining = 0
 
-                # Partials
+                # Partials Consolidation
                 partials.sort(key=lambda x: x['store'].distance_km)
                 while partials:
                     base = partials[0]
@@ -327,13 +339,17 @@ def schedule_truck():
                     for p in partials[:]:
                         if check_compatibility(truck, p['store'])[0] and (current_load + p['volume'] <= truck.capacity_tons):
                             if abs(p['store'].distance_km - base['store'].distance_km) <= 10:
-                                current_orders.append(p); current_load += p['volume']; partials.remove(p)
+                                current_orders.append(p)
+                                current_load += p['volume']
+                                partials.remove(p)
                     
                     for p in current_orders:
                         travel_hrs = (p['store'].distance_km / 30) + 2
                         db.session.add(Schedule(truck_id=truck.id, store_id=p['store'].id, driver_id=driver.id, load_weight=p['volume'], start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Merged'))
                     
-                    truck.trip_count += 1; driver.trip_count += 1; trips_generated += 1
+                    truck.trip_count += 1
+                    driver.trip_count += 1
+                    trips_generated += 1
 
                 db.session.commit()
                 flash(f'Auto-Plan: {trips_generated} trips generated.')
@@ -344,11 +360,13 @@ def schedule_truck():
                 store = db.session.get(Store, int(request.form.get('store_id')))
                 load = float(request.form.get('load_weight'))
                 truck_id_input = request.form.get('truck_id')
-                truck = None
                 
+                truck = None
                 if truck_id_input == 'auto':
                     suitable = [t for t in trucks if check_compatibility(t, store)[0] and t.capacity_tons >= load]
-                    if not suitable: flash("No truck fits."); return redirect(url_for('schedule_truck'))
+                    if not suitable:
+                        flash("Auto-Select Failed: No compatible active truck fits load.")
+                        return redirect(url_for('schedule_truck'))
                     truck = suitable[0]
                 else:
                     truck = db.session.get(Truck, int(truck_id_input))
@@ -356,12 +374,16 @@ def schedule_truck():
                     if not check_compatibility(truck, store)[0]: flash("Constraint Error"); return redirect(url_for('schedule_truck'))
 
                 if load > truck.capacity_tons: flash("Overload!"); return redirect(url_for('schedule_truck'))
+
                 driver = truck.assigned_driver
-                if not driver or driver.status != 'Active': flash("Truck has no active driver"); return redirect(url_for('schedule_truck'))
+                if not driver or driver.status != 'Active':
+                    flash("Truck has no active driver.")
+                    return redirect(url_for('schedule_truck'))
 
                 travel_hrs = (store.distance_km / 30) + 1
-                db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time+timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
-                truck.trip_count += 1; driver.trip_count += 1
+                db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
+                truck.trip_count += 1
+                driver.trip_count += 1
                 db.session.commit()
                 return redirect(url_for('dashboard'))
 
@@ -566,7 +588,7 @@ def import_stores():
             df = pd.read_excel(f); df.columns = df.columns.str.strip().str.lower()
             for _, r in df.iterrows():
                 n = str(r.get('name',''))
-                if n and n!='nan' and not Store.query.filter_by(name=n).first():
+                if n and n!='nan' and not Store.query.filter_by(name=str(r.get('name'))).first():
                     def pb(v): return str(v).lower() in ['yes', 'y', 'true', '1']
                     db.session.add(Store(name=n, address=str(r.get('address', '')), distance_km=float(r.get('distance', 10)), high_dock=pb(r.get('high dock', False)), small_gate=pb(r.get('small gate', False)), low_wires=pb(r.get('low wires', False)), user_id=current_user.id))
             db.session.commit(); flash('Imported.')
