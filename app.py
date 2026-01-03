@@ -12,11 +12,24 @@ from io import BytesIO
 import random
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'a-very-long-and-random-secret-key-for-production'
+# On Render, use the Secret Key env variable, otherwise use dev key
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-secret')
 
-# --- DATABASE CONFIGURATION (PythonAnywhere) ---
-# It will use a file in your home directory on the server
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////home/YOUR_PYTHONANYWHERE_USERNAME/mysite/logistics.db'
+# --- DATABASE CONFIGURATION (Hybrid: Local vs Cloud) ---
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+database_url = os.environ.get('DATABASE_URL')
+
+if database_url:
+    # Fix Render's postgres URL format if needed
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+else:
+    # We are Local -> Use SQLite
+    DB_NAME = 'logistics_prod.db'
+    DB_PATH = os.path.join(BASE_DIR, DB_NAME)
+    app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DB_PATH}'
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -31,7 +44,7 @@ WAREHOUSE_ADDRESS = "ATREOS DC 2 Oba Akran, 5 OBALUFON-LAGERE ROAD, LAGERE JUNCT
 def inject_datetime():
     return {'datetime': datetime}
 
-# --- PERMISSIONS ---
+# --- PERMISSION DECORATOR ---
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -60,7 +73,7 @@ class Driver(db.Model):
 class Truck(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    capacity_tons = db.Column(db.Float, nullable=False, default=0.0) # Pallets
+    capacity_tons = db.Column(db.Float, nullable=False, default=0.0)
     trip_count = db.Column(db.Integer, default=0)
     status = db.Column(db.String(50), default='Active') 
     assigned_driver_id = db.Column(db.Integer, db.ForeignKey('driver.id'), nullable=True)
@@ -84,7 +97,7 @@ class Schedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     start_time = db.Column(db.DateTime, nullable=False)
     end_time = db.Column(db.DateTime, nullable=False)
-    load_weight = db.Column(db.Float, nullable=False, default=0.0) # Pallets
+    load_weight = db.Column(db.Float, nullable=False, default=0.0)
     status = db.Column(db.String(20), default='Scheduled')
     trip_type = db.Column(db.String(50), default='Direct')
     truck_id = db.Column(db.Integer, db.ForeignKey('truck.id'), nullable=False)
@@ -107,68 +120,131 @@ class Maintenance(db.Model):
 def load_user(user_id):
     return db.session.get(User, int(user_id))
 
-# --- CREATE TABLES ON STARTUP (Fixes 500 Error on PythonAnywhere) ---
-with app.app_context():
-    db.create_all()
-
-# --- HELPER: CONSTRAINT CHECKER ---
+# --- HELPERS ---
 def check_compatibility(truck, store):
     if truck.is_low and store.high_dock: return False, f"{truck.name} is too LOW for {store.name}."
     if truck.is_large and store.small_gate: return False, f"{truck.name} is too BIG for {store.name}."
     if truck.is_tall and store.low_wires: return False, f"{truck.name} is too TALL for {store.name}."
     return True, "OK"
 
-# --- ALL ROUTES (Same as before, included for completeness) ---
+# --- ROUTES ---
 @app.route('/')
 def index(): return redirect(url_for('login'))
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         user = User.query.filter_by(username=request.form.get('username')).first()
-        if user and check_password_hash(user.password, request.form.get('password')): login_user(user); return redirect(url_for('dashboard'))
+        if user and check_password_hash(user.password, request.form.get('password')):
+            login_user(user)
+            return redirect(url_for('dashboard'))
         flash('Invalid username or password.')
     return render_template('login.html')
+
 @app.route('/logout')
 @login_required
 def logout(): logout_user(); return redirect(url_for('login'))
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-        if User.query.filter_by(username=request.form.get('username')).first(): flash('Username taken.')
+        if User.query.filter_by(username=request.form.get('username')).first():
+            flash('Username taken.')
         else:
             role = 'Admin' if User.query.count() == 0 else 'User'
             db.session.add(User(username=request.form.get('username'), password=generate_password_hash(request.form.get('password')), role=role))
-            db.session.commit(); return redirect(url_for('login'))
+            db.session.commit()
+            flash(f'Registered as {role}! Please login.')
+            return redirect(url_for('login'))
     return render_template('register.html')
+
+# ... (All other routes remain the same)
+# ... (Dashboard, Scheduling, Resources, etc.)
+
+# --- DASHBOARD ---
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    trucks = Truck.query.all(); stores = Store.query.all()
-    stats = {'truck_count': len(trucks), 'available_trucks': Truck.query.filter_by(status='Active').count(), 'maintenance_trucks': Truck.query.filter_by(status='Maintenance').count(), 'driver_count': Driver.query.filter_by(status='Active').count(), 'active_jobs': Schedule.query.filter_by(status='Scheduled').count(), 'maintenance_cost': sum(log.cost for log in Maintenance.query.all())}
+    trucks = Truck.query.all()
+    stores = Store.query.all()
+    stats = {
+        'truck_count': len(trucks),
+        'available_trucks': Truck.query.filter_by(status='Active').count(),
+        'maintenance_trucks': Truck.query.filter_by(status='Maintenance').count(),
+        'driver_count': Driver.query.filter_by(status='Active').count(),
+        'active_jobs': Schedule.query.filter_by(status='Scheduled').count(),
+        'maintenance_cost': sum(log.cost for log in Maintenance.query.all())
+    }
     return render_template('dashboard.html', trucks=trucks, stores=stores, stats=stats)
+
+# --- JOB UPLOADER ---
 @app.route('/download_job_template')
 @login_required
 def download_job_template():
-    df = pd.DataFrame([{'Store': s.name, 'Address': s.address, 'Pallets': ''} for s in Store.query.all()])
-    out = BytesIO(); df.to_excel(out, index=False); out.seek(0)
-    return send_file(out, download_name="bulk_job_template.xlsx", as_attachment=True)
+    stores = Store.query.all()
+    data = []
+    for s in stores:
+        data.append({'Store': s.name, 'Address': s.address, 'Pallets': ''})
+    
+    df = pd.DataFrame(data)
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+        worksheet = writer.sheets['Sheet1']
+        worksheet.column_dimensions['A'].width = 30
+        worksheet.column_dimensions['B'].width = 50
+    output.seek(0)
+    return send_file(output, download_name="bulk_job_template.xlsx", as_attachment=True)
+
 @app.route('/upload_job_manifest', methods=['POST'])
 @login_required
 def upload_job_manifest():
-    f = request.files.get('file')
-    if f:
-        df = pd.read_excel(f); df = df.fillna(0); df.columns = df.columns.str.strip().str.lower()
-        if 'store' in df.columns:
-            jobs = []
-            stores_db = Store.query.all()
-            for _, r in df.iterrows():
-                name, pallets = str(r.get('store','')).strip().lower(), float(r.get('pallets',0))
-                if pallets > 0:
-                    match = next((s for s in stores_db if s.name.lower() == name), None)
-                    if match: jobs.append({'store_id': match.id, 'store_name': match.name, 'store_address': match.address, 'volume': int(pallets)})
-            return render_template('schedule.html', trucks=Truck.query.filter_by(status='Active').all(), stores=stores_db, preview_jobs=jobs)
-    return redirect(url_for('schedule_truck'))
+    file = request.files.get('file')
+    if not file:
+        flash("No file selected.")
+        return redirect(url_for('schedule_truck'))
 
+    try:
+        df = pd.read_excel(file)
+        df = df.fillna(0)
+        df.columns = df.columns.str.strip().str.lower()
+        if 'store' not in df.columns:
+            flash("Error: Excel must have a column named 'Store'.")
+            return redirect(url_for('schedule_truck'))
+
+        preview_jobs = []
+        all_stores = Store.query.all()
+        
+        for _, row in df.iterrows():
+            excel_name = str(row.get('store', '')).strip().lower()
+            pallets = 0.0
+            if 'pallets' in df.columns: pallets = float(row.get('pallets', 0))
+            elif 'load' in df.columns: pallets = float(row.get('load', 0))
+            elif 'quantity' in df.columns: pallets = float(row.get('quantity', 0))
+            elif 'order' in df.columns: pallets = float(row.get('order', 0))
+            
+            if pallets <= 0: continue
+
+            match = next((s for s in all_stores if s.name.lower() == excel_name), None)
+            if match:
+                preview_jobs.append({'store_id': match.id, 'store_name': match.name, 'store_address': match.address, 'volume': int(pallets)})
+        
+        if not preview_jobs:
+            flash("No matching stores found in database. Check spelling.")
+            return redirect(url_for('schedule_truck'))
+
+        flash(f"Loaded {len(preview_jobs)} jobs from Excel. Please confirm.")
+        
+        trucks = Truck.query.filter_by(status='Active').order_by(Truck.trip_count).all()
+        stores = Store.query.all()
+        active_drivers = Driver.query.filter_by(status='Active').count()
+        return render_template('schedule.html', trucks=trucks, stores=stores, drivers=active_drivers, preview_jobs=preview_jobs)
+
+    except Exception as e:
+        flash(f"Error processing file: {str(e)}")
+        return redirect(url_for('schedule_truck'))
+
+# --- SCHEDULING ---
 @app.route('/schedule_truck', methods=['GET', 'POST'])
 @login_required
 def schedule_truck():
@@ -177,59 +253,102 @@ def schedule_truck():
     
     if request.method == 'POST':
         try:
+            schedule_type = request.form.get('schedule_type')
             start_time = datetime.strptime(request.form.get('start_time'), '%Y-%m-%dT%H:%M')
-            if request.form.get('schedule_type') == 'bulk':
-                sids, vols = request.form.getlist('store_ids[]'), request.form.getlist('volumes[]')
-                v_trucks = [t for t in trucks if t.capacity_tons>0 and t.assigned_driver_id]
-                if not v_trucks: flash("No trucks."); return redirect(url_for('schedule_truck'))
-                
-                orders = [{'store':db.session.get(Store, int(s_id)), 'volume':float(vol)} for s_id, vol in zip(sids,vols) if float(vol)>0]
-                count, idx, partials = 0, 0, []
 
+            if schedule_type == 'bulk':
+                store_ids = request.form.getlist('store_ids[]')
+                volumes = request.form.getlist('volumes[]')
+                
+                valid_trucks = [t for t in trucks if t.capacity_tons > 0 and t.assigned_driver_id]
+                if not valid_trucks: 
+                    flash("No active trucks with drivers available.")
+                    return redirect(url_for('schedule_truck'))
+
+                orders = []
+                for i in range(len(store_ids)):
+                    try: s_id, vol = int(store_ids[i]), float(volumes[i])
+                    except: continue
+                    if vol > 0: orders.append({'store': db.session.get(Store, s_id), 'volume': vol})
+
+                trips_generated = 0
+                truck_idx = 0
+                partials = []
+
+                # Full Loads
                 for order in orders:
-                    s, r = order['store'], order['volume']
-                    compat = [t for t in v_trucks if check_compatibility(t, s)[0]]
-                    if not compat: continue
-                    while r > 0:
-                        t = compat[idx % len(compat)]; d = t.assigned_driver
-                        if not d or d.status != 'Active': idx+=1; continue
-                        if r >= (t.capacity_tons*0.8):
-                            load = min(r, t.capacity_tons)
-                            db.session.add(Schedule(truck_id=t.id, store_id=s.id, driver_id=d.id, load_weight=load, start_time=start_time, end_time=start_time+timedelta(hours=2), status='Scheduled', trip_type='Direct'))
-                            t.trip_count+=1; d.trip_count+=1; idx+=1; count+=1; r-=load
-                        else: partials.append({'store':s, 'volume':r}); r=0
-                
-                partials.sort(key=lambda x:x['store'].distance_km)
-                while partials:
-                    base, base_compat = partials[0], [t for t in v_trucks if check_compatibility(t, partials[0]['store'])[0]]
-                    if not base_compat: partials.pop(0); continue
-                    t, d = base_compat[idx % len(base_compat)], base_compat[idx % len(base_compat)].assigned_driver; idx+=1
-                    if not d or d.status != 'Active': continue
+                    store = order['store']
+                    remaining = order['volume']
                     
-                    load, orders = 0, []
-                    for p in partials[:]:
-                        if check_compatibility(t, p['store'])[0] and (load+p['volume']<=t.capacity_tons) and abs(p['store'].distance_km-base['store'].distance_km)<=10:
-                            orders.append(p); load+=p['volume']; partials.remove(p)
-                    for p in orders: db.session.add(Schedule(truck_id=t.id, store_id=p['store'].id, driver_id=d.id, load_weight=p['volume'], start_time=start_time, end_time=start_time+timedelta(hours=3), status='Scheduled', trip_type='Merged'))
-                    t.trip_count+=1; d.trip_count+=1; count+=1
+                    compatible = [t for t in valid_trucks if check_compatibility(t, store)[0]]
+                    if not compatible: flash(f"Skipped {store.name}: No compatible trucks."); continue
 
-                db.session.commit(); return redirect(url_for('dashboard'))
+                    while remaining > 0:
+                        truck = compatible[truck_idx % len(compatible)]
+                        driver = truck.assigned_driver
+                        if not driver or driver.status != 'Active': truck_idx += 1; continue
+
+                        if remaining >= (truck.capacity_tons * 0.8):
+                            load = min(remaining, truck.capacity_tons)
+                            travel_hrs = (store.distance_km / 30) + 1
+                            db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
+                            truck.trip_count += 1; driver.trip_count += 1; truck_idx += 1; trips_generated += 1
+                            remaining -= load
+                        else:
+                            partials.append({'store': store, 'volume': remaining})
+                            remaining = 0
+
+                # Partials
+                partials.sort(key=lambda x: x['store'].distance_km)
+                while partials:
+                    base = partials[0]
+                    base_compat = [t for t in valid_trucks if check_compatibility(t, base['store'])[0]]
+                    if not base_compat: partials.pop(0); continue
+
+                    truck = base_compat[truck_idx % len(base_compat)]
+                    driver = truck.assigned_driver
+                    truck_idx += 1
+                    
+                    if not driver or driver.status != 'Active': continue
+                    
+                    current_load = 0
+                    current_orders = []
+                    for p in partials[:]:
+                        if check_compatibility(truck, p['store'])[0] and (current_load + p['volume'] <= truck.capacity_tons):
+                            if abs(p['store'].distance_km - base['store'].distance_km) <= 10:
+                                current_orders.append(p); current_load += p['volume']; partials.remove(p)
+                    
+                    for p in current_orders:
+                        travel_hrs = (p['store'].distance_km / 30) + 2
+                        db.session.add(Schedule(truck_id=truck.id, store_id=p['store'].id, driver_id=driver.id, load_weight=p['volume'], start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Merged'))
+                    
+                    truck.trip_count += 1; driver.trip_count += 1; trips_generated += 1
+
+                db.session.commit()
+                flash(f'Auto-Plan: {trips_generated} trips generated.')
+                return redirect(url_for('dashboard'))
+
             else:
-                s, load, t_id = db.session.get(Store, int(request.form.get('store_id'))), float(request.form.get('load_weight')), request.form.get('truck_id')
-                t = db.session.get(Truck, int(t_id))
-                if t.status=='Maintenance': flash("Truck in Maint."); return redirect(url_for('schedule_truck'))
-                if not check_compatibility(t,s)[0]: flash("Constraint Error"); return redirect(url_for('schedule_truck'))
-                if load > t.capacity_tons: flash("Overload"); return redirect(url_for('schedule_truck'))
-                d = t.assigned_driver
-                if not d or d.status!='Active': flash("No driver"); return redirect(url_for('schedule_truck'))
-                db.session.add(Schedule(truck_id=t.id, store_id=s.id, driver_id=d.id, load_weight=load, start_time=start_time, end_time=start_time+timedelta(hours=2), status='Scheduled', trip_type='Direct'))
-                t.trip_count+=1; d.trip_count+=1; db.session.commit(); return redirect(url_for('dashboard'))
-        except: flash("Error.")
+                store = db.session.get(Store, int(request.form.get('store_id')))
+                load = float(request.form.get('load_weight'))
+                truck = db.session.get(Truck, int(request.form.get('truck_id')))
+                
+                if truck.status == 'Maintenance': flash("Truck in Maintenance"); return redirect(url_for('schedule_truck'))
+                if not check_compatibility(truck, store)[0]: flash("Constraint Error"); return redirect(url_for('schedule_truck'))
+                if load > truck.capacity_tons: flash("Overload!"); return redirect(url_for('schedule_truck'))
+                driver = truck.assigned_driver
+                if not driver or driver.status != 'Active': flash("Truck has no active driver"); return redirect(url_for('schedule_truck'))
+
+                travel_hrs = (store.distance_km / 30) + 1
+                db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time+timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
+                truck.trip_count += 1; driver.trip_count += 1
+                db.session.commit()
+                return redirect(url_for('dashboard'))
+
+        except Exception as e: flash(f'Error: {e}')
     return render_template('schedule.html', trucks=trucks, stores=stores)
 
-# --- (Other routes like reports, maintenance, resources, etc.) ---
-# ... This code can be copied from the previous full version as it is correct ...
-# ... (Adding them back for completeness)
+# --- REPORTS ---
 @app.route('/reports')
 @login_required
 def reports():
@@ -248,27 +367,10 @@ def export_report():
     out = BytesIO(); pd.DataFrame(data).to_excel(out, index=False); out.seek(0)
     return send_file(out, download_name="trip_report.xlsx", as_attachment=True)
 
-@app.route('/api/get_trips_by_date/<date_str>')
-@login_required
-def get_trips_by_date(date_str):
-    try:
-        sd = datetime.strptime(date_str, '%Y-%m-%d').date()
-        trips = Schedule.query.join(Truck).filter(db.func.date(Schedule.start_time) == sd).order_by(Schedule.start_time.asc()).all()
-        res = []
-        for t in trips:
-            hr = t.start_time.hour
-            shift = "Morning" if 6 <= hr < 12 else "Afternoon" if 12 <= hr < 18 else "Overtime"
-            res.append({'id': t.id, 'trip_type': t.trip_type, 'shift': shift, 'truck': f"{t.truck.name} ({int(t.truck.capacity_tons)}P)", 'driver': t.driver.name if t.driver else '--', 'store': f"{t.store.name} - {t.store.address}", 'load': int(t.load_weight), 'status': t.status})
-        return jsonify({'status': 'success', 'data': res})
-    except Exception as e: return jsonify({'status': 'error', 'message': str(e)})
+# ... (All other routes remain the same) ...
 
-@app.route('/events')
-@login_required
-def get_events():
-    ev = []
-    for s in Schedule.query.filter(Schedule.status != 'Completed').all():
-        ev.append({'title': 'Trip', 'start': s.start_time.isoformat(), 'end': s.end_time.isoformat(), 'display': 'background', 'color': '#3788d8'})
-    return jsonify(ev)
+# This part is intentionally left blank to be filled by the previous full code
+# from /maintenance down to the final events/api routes
 
 @app.route('/maintenance', methods=['GET', 'POST'])
 @login_required
@@ -375,8 +477,8 @@ def delete_driver(id):
 
 @app.route('/add_truck', methods=['GET', 'POST'])
 @login_required
-@admin_required
 def add_truck():
+    if current_user.role != 'Admin': return redirect(url_for('dashboard'))
     if request.method == 'POST':
         db.session.add(Truck(name=request.form.get('name'), capacity_tons=float(request.form.get('capacity')), is_low='is_low' in request.form, is_large='is_large' in request.form, is_tall='is_tall' in request.form, user_id=current_user.id))
         db.session.commit(); return redirect(url_for('add_truck'))
@@ -408,8 +510,8 @@ def export_trucks():
 
 @app.route('/add_store', methods=['GET', 'POST'])
 @login_required
-@admin_required
 def add_store():
+    if current_user.role != 'Admin': return redirect(url_for('dashboard'))
     if request.method == 'POST':
         db.session.add(Store(name=request.form.get('name'), address=request.form.get('address'), distance_km=float(request.form.get('distance') or 10), high_dock='high_dock' in request.form, small_gate='small_gate' in request.form, low_wires='low_wires' in request.form, user_id=current_user.id))
         db.session.commit(); return redirect(url_for('add_store'))
@@ -463,8 +565,29 @@ def restore_db():
         flash('Restored')
     return redirect(url_for('settings'))
 
+@app.route('/events')
+@login_required
+def get_events():
+    ev = []
+    for s in Schedule.query.filter(Schedule.status != 'Completed').all():
+        link = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(WAREHOUSE_ADDRESS)}&destination={urllib.parse.quote(s.store.address)}"
+        ev.append({'title': f"{s.truck.name} ({s.driver.name if s.driver else 'No Driver'})", 'start': s.start_time.isoformat(), 'end': s.end_time.isoformat(), 'url': link, 'color': '#3788d8'})
+    return jsonify(ev)
+
+@app.route('/api/get_trips_by_date/<date_str>')
+@login_required
+def get_trips_by_date(date_str):
+    try:
+        sd = datetime.strptime(date_str, '%Y-%m-%d').date()
+        trips = Schedule.query.join(Truck).filter(db.func.date(Schedule.start_time) == sd).order_by(Schedule.start_time.asc()).all()
+        res = []
+        for t in trips:
+            hr = t.start_time.hour
+            shift = "Morning" if 6 <= hr < 12 else "Afternoon" if 12 <= hr < 18 else "Overtime"
+            res.append({'id': t.id, 'trip_type': t.trip_type, 'shift': shift, 'truck': f"{t.truck.name} ({int(t.truck.capacity_tons)}P)", 'driver': t.driver.name if t.driver else '--', 'store': f"{t.store.name} - {t.store.address}", 'load': int(t.load_weight), 'status': t.status})
+        return jsonify({'status': 'success', 'data': res})
+    except Exception as e: return jsonify({'status': 'error', 'message': str(e)})
+
 if __name__ == '__main__':
-    # This block is for LOCAL RUN only. Gunicorn ignores it.
-    with app.app_context():
-        db.create_all()
+    # REMOVED: db.create_all() from local run to prevent startup issues
     app.run(debug=True, port=8080)
