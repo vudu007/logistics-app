@@ -3,43 +3,31 @@ from app import app, db
 import webbrowser
 from threading import Timer
 import os
-import shutil # Added import
-from datetime import datetime # Added import
+import shutil
+from datetime import datetime
 
 # --- CONFIGURATION ---
-DB_FILENAME = 'logistics_prod.db'
+DB_FILENAME = 'logistics_prod.db' # Ensure this matches app.py
 BACKUP_FOLDER = 'backups'
 
 def create_backup(event_type):
-    """
-    Creates a backup of the database file.
-    event_type: 'STARTUP' or 'SHUTDOWN'
-    """
-    # 1. Create backup folder if it doesn't exist
+    """Creates a backup of the database file."""
     if not os.path.exists(BACKUP_FOLDER):
         os.makedirs(BACKUP_FOLDER)
-
-    # 2. Check if DB exists
     if os.path.exists(DB_FILENAME):
-        # 3. Create formatted filename (e.g., logistics_STARTUP_2025-01-03_14-30.db)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         destination = os.path.join(os.path.abspath(os.path.dirname(__file__)), BACKUP_FOLDER, f"logistics_{event_type}_{timestamp}.db")
-
         try:
             shutil.copy2(DB_FILENAME, destination)
             print(f"[{event_type}] Backup successful: {os.path.basename(destination)}")
         except Exception as e:
             print(f"[{event_type}] Backup FAILED: {e}")
-    else:
-        print(f"[{event_type}] No database found to back up yet.")
 
 def open_browser():
-    """Opens the default web browser"""
-    print("Launching Browser...")
     webbrowser.open_new("http://localhost:8080")
 
 if __name__ == '__main__':
-    # Ensure Database Exists before starting
+    # CRITICAL: Create tables INSIDE the app context, here.
     with app.app_context():
         db.create_all()
 
@@ -47,7 +35,7 @@ if __name__ == '__main__':
     print(" PRODUCTION SERVER INITIALIZING")
     print("-------------------------------------------------------")
 
-    # --- 1. PERFORM STARTUP BACKUP ---
+    # Perform Startup Backup
     create_backup("STARTUP")
 
     print("-------------------------------------------------------")
@@ -56,17 +44,14 @@ if __name__ == '__main__':
     print(" Stop:   Press CTRL + C")
     print("-------------------------------------------------------")
     
-    # Auto-open browser after 1.5 seconds
+    # Auto-open browser
     Timer(1.5, open_browser).start()
     
     try:
-        # Start the Waitress Server
         serve(app, host='0.0.0.0', port=8080, threads=6)
     except KeyboardInterrupt:
-        # This catches CTRL+C
         print("\nStopping server...")
     finally:
-        # --- 2. PERFORM SHUTDOWN BACKUP ---
-        print("Performing safety backup...")
+        # Perform Shutdown Backup
         create_backup("SHUTDOWN")
         print("Goodbye!")
