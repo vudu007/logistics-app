@@ -1,0 +1,2 @@
+mkdir truck_scheduler
+cd truck_scheduler

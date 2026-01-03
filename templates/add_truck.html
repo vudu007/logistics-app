@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Manage Trucks{% endblock %}
+{% block content %}
+<div class="row">
+    <div class="col-12 mb-4"><h2><i class="fas fa-truck text-primary"></i> Fleet Management</h2></div>
+</div>
+<div class="row">
+    <div class="col-md-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-primary text-white">Add Single Truck</div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('add_truck') }}">
+                    <div class="mb-3"><label class="form-label">Name</label><input type="text" name="name" class="form-control" required></div>
+                    <div class="mb-3"><label class="form-label">Capacity (Pallets)</label><input type="number" step="0.1" name="capacity" class="form-control" required></div>
+                    <div class="mb-3 p-2 border rounded bg-light">
+                        <label class="form-label fw-bold small text-uppercase text-muted">Characteristics</label>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" name="is_low"><label class="form-check-label text-danger">Is Low-Bed</label></div>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" name="is_large"><label class="form-check-label text-danger">Is Big Rig</label></div>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" name="is_tall"><label class="form-check-label text-danger">Is Tall</label></div>
+                    </div>
+                    <div class="d-grid gap-2"><button type="submit" class="btn btn-success">Save Truck</button></div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-dark text-white">Bulk Operations</div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('import_trucks') }}" enctype="multipart/form-data">
+                    <div class="input-group"><input type="file" name="file" class="form-control" accept=".xlsx" required><button class="btn btn-outline-primary" type="submit">Upload</button></div>
+                </form>
+                <hr>
+                <div class="d-grid gap-2"><a href="{{ url_for('export_trucks') }}" class="btn btn-outline-success">Download Fleet</a></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

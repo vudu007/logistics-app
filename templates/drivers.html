@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block title %}Driver Management{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4">
+    
+    <!-- HEADER & ACTIONS -->
+    <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        <div>
+            <h2 class="text-2xl font-bold text-slate-800">Driver Roster</h2>
+            <p class="text-slate-500 text-sm">Manage fleet personnel and assignments</p>
+        </div>
+        
+        <div class="flex gap-3 w-full md:w-auto">
+            <!-- Search Bar -->
+            <div class="relative w-full md:w-64">
+                <input type="text" id="driverSearch" placeholder="Search drivers..." class="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-300 focus:outline-none focus:border-amber-500 transition shadow-sm">
+                <i class="fas fa-search absolute left-3 top-3 text-slate-400"></i>
+            </div>
+
+            {% if current_user.role == 'Admin' %}
+            <button data-bs-toggle="modal" data-bs-target="#addDriverModal" class="bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2 px-4 rounded-lg shadow-md transition flex items-center whitespace-nowrap">
+                <i class="fas fa-user-plus mr-2"></i> Add Driver
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- DRIVER GRID -->
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6" id="driverGrid">
+        {% for driver in drivers %}
+        <div class="driver-card bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:shadow-md transition duration-300 relative group">
+            
+            <!-- Top Section: Avatar & Info -->
+            <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 text-xl font-bold border-2 border-white shadow-sm">
+                        {{ driver.name[0] | upper }}
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-slate-800 text-lg leading-tight driver-name">{{ driver.name }}</h3>
+                        <p class="text-xs text-slate-500 mt-1">
+                            <i class="fas fa-id-card mr-1"></i> {{ driver.license_number }}
+                        </p>
+                    </div>
+                </div>
+                <!-- Status Badge -->
+                {% if driver.status == 'Active' %}
+                    <span class="px-2 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full border border-green-200">Active</span>
+                {% elif driver.status == 'Off Shift' %}
+                    <span class="px-2 py-1 bg-slate-100 text-slate-600 text-xs font-bold rounded-full border border-slate-200">Off Shift</span>
+                {% elif driver.status == 'Sick' %}
+                    <span class="px-2 py-1 bg-red-100 text-red-700 text-xs font-bold rounded-full border border-red-200">Sick</span>
+                {% else %}
+                    <span class="px-2 py-1 bg-yellow-100 text-yellow-700 text-xs font-bold rounded-full border border-yellow-200">Leave</span>
+                {% endif %}
+            </div>
+
+            <!-- Details Section -->
+            <div class="space-y-2 mb-4">
+                <div class="flex items-center justify-between text-sm">
+                    <span class="text-slate-500"><i class="fas fa-phone mr-2 w-4"></i>Phone</span>
+                    <span class="font-medium text-slate-700">{{ driver.phone }}</span>
+                </div>
+                <div class="flex items-center justify-between text-sm">
+                    <span class="text-slate-500"><i class="fas fa-truck mr-2 w-4"></i>Truck</span>
+                    <!-- Find assigned truck -->
+                    {% set assigned = [] %}
+                    {% for t in trucks %}
+                        {% if t.assigned_driver_id == driver.id %}
+                            {% set _ = assigned.append(t.name) %}
+                        {% endif %}
+                    {% endfor %}
+                    
+                    {% if assigned %}
+                        <span class="font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{{ assigned[0] }}</span>
+                    {% else %}
+                        <span class="text-slate-400 italic">Unassigned</span>
+                    {% endif %}
+                </div>
+                <div class="flex items-center justify-between text-sm">
+                    <span class="text-slate-500"><i class="fas fa-route mr-2 w-4"></i>Total Trips</span>
+                    <span class="font-medium text-slate-700">{{ driver.trip_count }}</span>
+                </div>
+            </div>
+
+            <!-- Actions Footer -->
+            <div class="pt-4 border-t border-slate-100 flex justify-between items-center">
+                <!-- Quick Status Change -->
+                <form method="POST" class="flex-1 mr-2">
+                    <input type="hidden" name="status_update" value="true">
+                    <input type="hidden" name="driver_id" value="{{ driver.id }}">
+                    <select name="status" class="w-full text-xs border-slate-200 rounded text-slate-600 focus:border-amber-500 focus:ring-0 py-1" onchange="this.form.submit()">
+                        <option value="Active" {% if driver.status == 'Active' %}selected{% endif %}>Set Active</option>
+                        <option value="Off Shift" {% if driver.status == 'Off Shift' %}selected{% endif %}>Set Off Shift</option>
+                        <option value="Sick" {% if driver.status == 'Sick' %}selected{% endif %}>Set Sick</option>
+                        <option value="Annual Leave" {% if driver.status == 'Annual Leave' %}selected{% endif %}>Set Leave</option>
+                    </select>
+                </form>
+
+                {% if current_user.role == 'Admin' %}
+                <div class="flex gap-2">
+                    <button class="w-8 h-8 rounded-full bg-slate-50 text-blue-500 hover:bg-blue-500 hover:text-white transition flex items-center justify-center" data-bs-toggle="modal" data-bs-target="#editModal{{ driver.id }}">
+                        <i class="fas fa-edit text-xs"></i>
+                    </button>
+                    <form action="{{ url_for('delete_driver', id=driver.id) }}" method="POST" onsubmit="return confirm('Delete {{ driver.name }}?');">
+                        <button class="w-8 h-8 rounded-full bg-slate-50 text-red-500 hover:bg-red-500 hover:text-white transition flex items-center justify-center">
+                            <i class="fas fa-trash text-xs"></i>
+                        </button>
+                    </form>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- EDIT MODAL (Per Driver) -->
+        {% if current_user.role == 'Admin' %}
+        <div class="modal fade" id="editModal{{ driver.id }}" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header bg-slate-900 text-white">
+                        <h5 class="modal-title">Edit Driver: {{ driver.name }}</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <form action="{{ url_for('edit_driver', id=driver.id) }}" method="POST">
+                        <div class="modal-body p-4">
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Full Name</label>
+                                <input type="text" name="name" class="form-control" value="{{ driver.name }}" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">License Number</label>
+                                <input type="text" name="license_number" class="form-control" value="{{ driver.license_number }}" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Phone Number</label>
+                                <input type="text" name="phone" class="form-control" value="{{ driver.phone }}">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Assign Truck</label>
+                                <select name="truck_id" class="form-select">
+                                    <option value="">-- Remove Assignment --</option>
+                                    {% for t in trucks %}
+                                        <option value="{{ t.id }}" {% if t.assigned_driver_id == driver.id %}selected{% endif %}>
+                                            {{ t.name }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="modal-footer bg-gray-50">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-primary bg-slate-900 border-0">Save Changes</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="col-span-full text-center py-10">
+            <div class="inline-block p-4 rounded-full bg-slate-100 text-slate-400 mb-3">
+                <i class="fas fa-users-slash text-4xl"></i>
+            </div>
+            <h3 class="text-lg font-bold text-slate-600">No Drivers Found</h3>
+            <p class="text-slate-400 text-sm">Add a new driver to get started.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- ADD DRIVER MODAL (Admin Only) -->
+{% if current_user.role == 'Admin' %}
+<div class="modal fade" id="addDriverModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-amber-500 text-slate-900">
+                <h5 class="modal-title font-bold"><i class="fas fa-user-plus mr-2"></i>Add New Driver</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="POST">
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Full Name</label>
+                        <input type="text" name="name" class="form-control" placeholder="e.g. John Doe" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">License Number</label>
+                        <input type="text" name="license_number" class="form-control" placeholder="e.g. DL-12345678" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Phone Number</label>
+                        <input type="text" name="phone" class="form-control" placeholder="e.g. 080-123-4567">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Assign Truck (Optional)</label>
+                        <select name="truck_id" class="form-select">
+                            <option value="">-- No Truck --</option>
+                            {% for truck in trucks %}
+                                <option value="{{ truck.id }}">{{ truck.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">You can assign a truck later via the Edit button.</div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-gray-50">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success bg-amber-500 text-slate-900 border-0 hover:bg-amber-600 font-bold">Create Driver</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Client-Side Search Script -->
+<script>
+    document.getElementById('driverSearch').addEventListener('keyup', function() {
+        let filter = this.value.toLowerCase();
+        let cards = document.querySelectorAll('.driver-card');
+
+        cards.forEach(card => {
+            let name = card.querySelector('.driver-name').textContent.toLowerCase();
+            if (name.includes(filter)) {
+                card.style.display = "";
+            } else {
+                card.style.display = "none";
+            }
+        });
+    });
+</script>
+{% endblock %}

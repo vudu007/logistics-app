@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Trip Logs{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-md-6 d-flex align-items-center">
+        <h2 class="text-white"><i class="fas fa-calendar-check me-2 text-warning"></i> Daily Trip Logs</h2>
+    </div>
+    <div class="col-md-6 text-end">
+        <a href="{{ url_for('export_report') }}" class="btn btn-success me-2"><i class="fas fa-file-excel"></i> Export All</a>
+        <a href="{{ url_for('clear_logs') }}" class="btn btn-outline-danger" onclick="return confirm('Warning: Clear completed history?');"><i class="fas fa-trash"></i> Clear History</a>
+    </div>
+</div>
+
+<div class="row">
+    <!-- LEFT: Calendar Selection -->
+    <div class="col-md-4">
+        <div class="card shadow-lg h-100">
+            <div class="card-header bg-primary text-white">
+                <i class="fas fa-filter me-2"></i>Select Date
+            </div>
+            <div class="card-body p-2">
+                <div id="reportCalendar"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT: Trip Details -->
+    <div class="col-md-8">
+        <div class="card shadow-lg h-100">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 text-primary fw-bold" id="selectedDateLabel">Select a date...</h5>
+                <span class="badge bg-secondary" id="tripCountBadge">0 Trips</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 600px; overflow-y: auto;">
+                    <table class="table table-hover align-middle mb-0" id="tripsTable">
+                        <thead class="table-dark sticky-top">
+                            <tr>
+                                <th>Shift</th>
+                                <th>Truck</th>
+                                <th>Driver</th>
+                                <th>Destination</th>
+                                <th>Load</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tripsTableBody">
+                            <tr>
+                                <td colspan="7" class="text-center py-5 text-muted">
+                                    <i class="fas fa-calendar-day fa-3x mb-3 text-secondary"></i><br>
+                                    Click a date on the calendar.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js'></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        var calendar = new FullCalendar.Calendar(document.getElementById('reportCalendar'), {
+            initialView: 'dayGridMonth',
+            height: 'auto',
+            headerToolbar: { left: 'title', right: 'prev,next today' },
+            selectable: true,
+            events: { url: '/events', display: 'background' },
+            dateClick: function(info) {
+                document.querySelectorAll('.fc-daygrid-day').forEach(el => el.style.backgroundColor = '');
+                info.dayEl.style.backgroundColor = 'rgba(245, 158, 11, 0.2)'; 
+                loadTrips(info.dateStr);
+            }
+        });
+        calendar.render();
+    });
+
+    function loadTrips(dateStr) {
+        document.getElementById('selectedDateLabel').innerText = `Logs for: ${dateStr}`;
+        const tbody = document.getElementById('tripsTableBody');
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">Loading...</td></tr>';
+        
+        fetch(`/api/get_trips_by_date/${dateStr}`)
+            .then(res => res.json())
+            .then(data => {
+                tbody.innerHTML = '';
+                if(data.data.length > 0) {
+                    document.getElementById('tripCountBadge').textContent = `${data.data.length} Trips`;
+                    data.data.forEach(t => {
+                        let shiftBadge = t.shift === 'Morning' ? 'bg-info text-dark' : 'bg-warning text-dark';
+                        let actionBtns = t.status !== 'Completed' ? 
+                            `<a href="/mark_complete/${t.id}" class="btn btn-sm text-success"><i class="fas fa-check"></i></a> 
+                             <a href="/revert_trip/${t.id}" class="btn btn-sm text-danger"><i class="fas fa-undo"></i></a>` : 
+                            '<i class="fas fa-check-double text-muted"></i>';
+
+                        tbody.innerHTML += `<tr>
+                            <td><span class="badge ${shiftBadge}">${t.shift}</span></td>
+                            <td>${t.truck}</td>
+                            <td>${t.driver}</td>
+                            <td><small>${t.store}</small></td>
+                            <td class="fw-bold">${t.load} P</td>
+                            <td><span class="badge bg-primary">${t.status}</span></td>
+                            <td>${actionBtns}</td>
+                        </tr>`;
+                    });
+                } else {
+                    document.getElementById('tripCountBadge').textContent = `0 Trips`;
+                    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No trips found.</td></tr>';
+                }
+            });
+    }
+</script>
+{% endblock %}
