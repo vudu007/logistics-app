@@ -12,19 +12,22 @@ from io import BytesIO
 import random
 
 app = Flask(__name__)
-# Use environment variable for secret key in production, fallback for local
+# On Render, use the Secret Key env variable, otherwise use dev key
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-secret')
 
-# --- DATABASE CONFIGURATION ---
+# --- DATABASE CONFIGURATION (Hybrid: Local vs Cloud) ---
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
-# Check for Render Database URL (PostgreSQL), otherwise use Local SQLite
+# Check if running on Render (Cloud)
 database_url = os.environ.get('DATABASE_URL')
+
 if database_url:
+    # Fix Render's postgres URL format if needed
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 else:
+    # We are Local -> Use SQLite
     DB_NAME = 'logistics_prod.db'
     DB_PATH = os.path.join(BASE_DIR, DB_NAME)
     app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DB_PATH}'
@@ -43,7 +46,7 @@ WAREHOUSE_ADDRESS = "ATREOS DC 2 Oba Akran, 5 OBALUFON-LAGERE ROAD, LAGERE JUNCT
 def inject_datetime():
     return {'datetime': datetime}
 
-# --- PERMISSIONS ---
+# --- PERMISSION DECORATOR ---
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -72,11 +75,10 @@ class Driver(db.Model):
 class Truck(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    capacity_tons = db.Column(db.Float, nullable=False, default=0.0) # Pallets
+    capacity_tons = db.Column(db.Float, nullable=False, default=0.0) # Used for Pallets
     trip_count = db.Column(db.Integer, default=0)
     status = db.Column(db.String(50), default='Active') 
     
-    # Dedicated Driver Link
     assigned_driver_id = db.Column(db.Integer, db.ForeignKey('driver.id'), nullable=True)
     assigned_driver = db.relationship('Driver', backref='trucks')
     
@@ -127,20 +129,21 @@ class Maintenance(db.Model):
 def load_user(user_id):
     return db.session.get(User, int(user_id))
 
-# --- CREATE TABLES ON STARTUP ---
+# --- IMPORTANT: CREATE TABLES ON STARTUP ---
 with app.app_context():
     db.create_all()
 
-# --- HELPER: CONSTRAINT CHECKER ---
+# --- HELPERS ---
 def check_compatibility(truck, store):
     if truck.is_low and store.high_dock: return False, f"{truck.name} is too LOW for {store.name}."
     if truck.is_large and store.small_gate: return False, f"{truck.name} is too BIG for {store.name}."
     if truck.is_tall and store.low_wires: return False, f"{truck.name} is too TALL for {store.name}."
     return True, "OK"
 
-# --- ROUTES ---
+# --- AUTH ROUTES ---
 @app.route('/')
-def index(): return redirect(url_for('login'))
+def index():
+    return redirect(url_for('login'))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -154,7 +157,9 @@ def login():
 
 @app.route('/logout')
 @login_required
-def logout(): logout_user(); return redirect(url_for('login'))
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -201,6 +206,7 @@ def download_job_template():
         worksheet = writer.sheets['Sheet1']
         worksheet.column_dimensions['A'].width = 30
         worksheet.column_dimensions['B'].width = 50
+        worksheet.column_dimensions['C'].width = 15
     output.seek(0)
     return send_file(output, download_name="bulk_job_template.xlsx", as_attachment=True)
 
@@ -229,12 +235,18 @@ def upload_job_manifest():
             if 'pallets' in df.columns: pallets = float(row.get('pallets', 0))
             elif 'load' in df.columns: pallets = float(row.get('load', 0))
             elif 'quantity' in df.columns: pallets = float(row.get('quantity', 0))
+            elif 'order' in df.columns: pallets = float(row.get('order', 0))
             
             if pallets <= 0: continue
 
             match = next((s for s in all_stores if s.name.lower() == excel_name), None)
             if match:
-                preview_jobs.append({'store_id': match.id, 'store_name': match.name, 'store_address': match.address, 'volume': int(pallets)})
+                preview_jobs.append({
+                    'store_id': match.id,
+                    'store_name': match.name,
+                    'store_address': match.address,
+                    'volume': int(pallets)
+                })
         
         if not preview_jobs:
             flash("No matching stores found in database. Check spelling.")
@@ -257,6 +269,7 @@ def upload_job_manifest():
 def schedule_truck():
     trucks = Truck.query.filter_by(status='Active').order_by(Truck.trip_count).all()
     stores = Store.query.all()
+    active_drivers = Driver.query.filter_by(status='Active').order_by(Driver.trip_count).all()
     
     if request.method == 'POST':
         try:
@@ -288,18 +301,25 @@ def schedule_truck():
                     remaining = order['volume']
                     
                     compatible = [t for t in valid_trucks if check_compatibility(t, store)[0]]
-                    if not compatible: flash(f"Skipped {store.name}: No compatible trucks."); continue
+                    if not compatible: 
+                        flash(f"Skipped {store.name}: No compatible trucks.")
+                        continue
 
                     while remaining > 0:
                         truck = compatible[truck_idx % len(compatible)]
                         driver = truck.assigned_driver
-                        if not driver or driver.status != 'Active': truck_idx += 1; continue
+                        
+                        if not driver or driver.status != 'Active':
+                            truck_idx += 1; continue
 
                         if remaining >= (truck.capacity_tons * 0.8):
                             load = min(remaining, truck.capacity_tons)
                             travel_hrs = (store.distance_km / 30) + 1
                             db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
-                            truck.trip_count += 1; driver.trip_count += 1; truck_idx += 1; trips_generated += 1
+                            
+                            truck.trip_count += 1
+                            driver.trip_count += 1
+                            truck_idx += 1; trips_generated += 1
                             remaining -= load
                         else:
                             partials.append({'store': store, 'volume': remaining})
@@ -315,34 +335,43 @@ def schedule_truck():
                     truck = base_compat[truck_idx % len(base_compat)]
                     driver = truck.assigned_driver
                     truck_idx += 1
+                    
                     if not driver or driver.status != 'Active': continue
                     
                     current_load = 0
                     current_orders = []
+                    
                     for p in partials[:]:
                         if check_compatibility(truck, p['store'])[0] and (current_load + p['volume'] <= truck.capacity_tons):
-                             if abs(p['store'].distance_km - base['store'].distance_km) <= 10:
-                                current_orders.append(p); current_load += p['volume']; partials.remove(p)
+                            if abs(p['store'].distance_km - base['store'].distance_km) <= 10:
+                                current_orders.append(p)
+                                current_load += p['volume']
+                                partials.remove(p)
                     
                     for p in current_orders:
                         travel_hrs = (p['store'].distance_km / 30) + 2
                         db.session.add(Schedule(truck_id=truck.id, store_id=p['store'].id, driver_id=driver.id, load_weight=p['volume'], start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Merged'))
                     
-                    truck.trip_count += 1; driver.trip_count += 1; trips_generated += 1
+                    truck.trip_count += 1
+                    driver.trip_count += 1
+                    trips_generated += 1
 
                 db.session.commit()
                 flash(f'Auto-Plan: {trips_generated} trips generated.')
                 return redirect(url_for('dashboard'))
 
             else:
+                # Single Trip
                 store = db.session.get(Store, int(request.form.get('store_id')))
                 load = float(request.form.get('load_weight'))
                 truck_id_input = request.form.get('truck_id')
-                truck = None
                 
+                truck = None
                 if truck_id_input == 'auto':
                     suitable = [t for t in trucks if check_compatibility(t, store)[0] and t.capacity_tons >= load]
-                    if not suitable: flash("No truck fits."); return redirect(url_for('schedule_truck'))
+                    if not suitable:
+                        flash("Auto-Select Failed: No compatible active truck fits load.")
+                        return redirect(url_for('schedule_truck'))
                     truck = suitable[0]
                 else:
                     truck = db.session.get(Truck, int(truck_id_input))
@@ -350,17 +379,21 @@ def schedule_truck():
                     if not check_compatibility(truck, store)[0]: flash("Constraint Error"); return redirect(url_for('schedule_truck'))
 
                 if load > truck.capacity_tons: flash("Overload!"); return redirect(url_for('schedule_truck'))
+
                 driver = truck.assigned_driver
-                if not driver or driver.status != 'Active': flash("Truck has no active driver"); return redirect(url_for('schedule_truck'))
+                if not driver or driver.status != 'Active':
+                    flash("Truck has no active driver.")
+                    return redirect(url_for('schedule_truck'))
 
                 travel_hrs = (store.distance_km / 30) + 1
-                db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time+timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
-                truck.trip_count += 1; driver.trip_count += 1
+                db.session.add(Schedule(truck_id=truck.id, store_id=store.id, driver_id=driver.id, load_weight=load, start_time=start_time, end_time=start_time + timedelta(hours=travel_hrs), status='Scheduled', trip_type='Direct'))
+                truck.trip_count += 1
+                driver.trip_count += 1
                 db.session.commit()
                 return redirect(url_for('dashboard'))
 
         except Exception as e: flash(f'Error: {e}')
-    return render_template('schedule.html', trucks=trucks, stores=stores)
+    return render_template('schedule.html', trucks=trucks, stores=stores, drivers=active_drivers)
 
 # --- REPORTS ---
 @app.route('/reports')
@@ -381,6 +414,29 @@ def export_report():
     out = BytesIO(); pd.DataFrame(data).to_excel(out, index=False); out.seek(0)
     return send_file(out, download_name="trip_report.xlsx", as_attachment=True)
 
+# --- API FOR CALENDAR ---
+@app.route('/api/get_trips_by_date/<date_str>')
+@login_required
+def get_trips_by_date(date_str):
+    try:
+        sd = datetime.strptime(date_str, '%Y-%m-%d').date()
+        trips = Schedule.query.join(Truck).filter(db.func.date(Schedule.start_time) == sd).order_by(Schedule.start_time.asc()).all()
+        res = []
+        for t in trips:
+            hr = t.start_time.hour
+            shift = "Morning" if 6 <= hr < 12 else "Afternoon" if 12 <= hr < 18 else "Overtime"
+            res.append({'id': t.id, 'trip_type': t.trip_type, 'shift': shift, 'truck': f"{t.truck.name} ({int(t.truck.capacity_tons)}P)", 'driver': t.driver.name if t.driver else '--', 'store': f"{t.store.name} - {t.store.address}", 'load': int(t.load_weight), 'status': t.status})
+        return jsonify({'status': 'success', 'data': res})
+    except Exception as e: return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/events')
+@login_required
+def get_events():
+    ev = []
+    for s in Schedule.query.filter(Schedule.status != 'Completed').all():
+        ev.append({'title': 'Trip', 'start': s.start_time.isoformat(), 'end': s.end_time.isoformat(), 'display': 'background', 'color': '#3788d8'})
+    return jsonify(ev)
+
 # --- MAINTENANCE & RESOURCES ---
 @app.route('/maintenance', methods=['GET', 'POST'])
 @login_required
@@ -396,8 +452,57 @@ def maintenance():
 @login_required
 def toggle_truck_status(id):
     t = db.session.get(Truck, id)
-    if t: t.status='Maintenance' if t.status=='Active' else 'Active'; db.session.commit()
+    if t: 
+        t.status = 'Maintenance' if t.status == 'Active' else 'Active'
+        db.session.commit()
     return redirect(url_for('maintenance'))
+
+@app.route('/clear_logs')
+@login_required
+@admin_required
+def clear_logs():
+    Schedule.query.filter(Schedule.status=='Completed').delete()
+    db.session.commit()
+    return redirect(url_for('reports'))
+
+@app.route('/mark_complete/<int:id>')
+@login_required
+def mark_complete(id):
+    t = db.session.get(Schedule, id)
+    if t: 
+        t.status = 'Completed'
+        db.session.commit()
+    return redirect(url_for('reports'))
+
+@app.route('/revert_trip/<int:id>')
+@login_required
+def revert_trip(id):
+    t = db.session.get(Schedule, id)
+    if t:
+        if t.truck.trip_count > 0: t.truck.trip_count -= 1
+        if t.driver.trip_count > 0: t.driver.trip_count -= 1
+        db.session.delete(t)
+        db.session.commit()
+    return redirect(url_for('reports'))
+
+@app.route('/users', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def users():
+    if request.method == 'POST':
+        if not User.query.filter_by(username=request.form.get('username')).first():
+            db.session.add(User(username=request.form.get('username'), password=generate_password_hash(request.form.get('password')), role=request.form.get('role')))
+            db.session.commit()
+    return render_template('users.html', users=User.query.all())
+
+@app.route('/delete_user/<int:id>', methods=['POST'])
+@login_required
+@admin_required
+def delete_user(id):
+    if id!=current_user.id: 
+        db.session.delete(db.session.get(User, id))
+        db.session.commit()
+    return redirect(url_for('users'))
 
 @app.route('/drivers', methods=['GET', 'POST'])
 @login_required
@@ -406,11 +511,14 @@ def drivers():
     if request.method == 'POST':
         if 'status_update' in request.form:
             d = db.session.get(Driver, request.form.get('driver_id'))
-            if d: d.status=request.form.get('status'); db.session.commit()
+            if d: 
+                d.status = request.form.get('status')
+                db.session.commit()
         else:
             if current_user.role == 'Admin':
                 d = Driver(name=request.form.get('name'), license_number=request.form.get('license_number'), phone=request.form.get('phone'), user_id=current_user.id)
-                db.session.add(d); db.session.commit()
+                db.session.add(d)
+                db.session.commit()
                 if request.form.get('truck_id'):
                     t = db.session.get(Truck, request.form.get('truck_id'))
                     t.assigned_driver_id = d.id
@@ -423,7 +531,8 @@ def drivers():
 def edit_driver(id):
     d = db.session.get(Driver, id)
     if d: 
-        d.name = request.form.get('name'); d.phone = request.form.get('phone')
+        d.name = request.form.get('name')
+        d.phone = request.form.get('phone')
         new_tid = request.form.get('truck_id')
         old = Truck.query.filter_by(assigned_driver_id=d.id).first()
         if old: old.assigned_driver_id = None
@@ -442,7 +551,8 @@ def delete_driver(id):
         t = Truck.query.filter_by(assigned_driver_id=d.id).first()
         if t: t.assigned_driver_id = None
         for s in Schedule.query.filter_by(driver_id=d.id).all(): s.driver_id = None
-        db.session.delete(d); db.session.commit()
+        db.session.delete(d)
+        db.session.commit()
     return redirect(url_for('drivers'))
 
 @app.route('/add_truck', methods=['GET', 'POST'])
@@ -451,7 +561,8 @@ def add_truck():
     if current_user.role != 'Admin': return redirect(url_for('dashboard'))
     if request.method == 'POST':
         db.session.add(Truck(name=request.form.get('name'), capacity_tons=float(request.form.get('capacity')), is_low='is_low' in request.form, is_large='is_large' in request.form, is_tall='is_tall' in request.form, user_id=current_user.id))
-        db.session.commit(); return redirect(url_for('add_truck'))
+        db.session.commit()
+        return redirect(url_for('add_truck'))
     return render_template('add_truck.html')
 
 @app.route('/import_trucks', methods=['POST'])
@@ -467,7 +578,8 @@ def import_trucks():
                 if n!='nan' and not Truck.query.filter_by(name=str(r['name'])).first():
                     cap = float(r.get('capacity', 0) or r.get('capacity_tons', 0))
                     db.session.add(Truck(name=n, capacity_tons=cap, user_id=current_user.id))
-            db.session.commit(); flash('Imported.')
+            db.session.commit()
+            flash('Imported.')
         except: flash('Error')
     return redirect(url_for('add_truck'))
 
@@ -484,7 +596,8 @@ def add_store():
     if current_user.role != 'Admin': return redirect(url_for('dashboard'))
     if request.method == 'POST':
         db.session.add(Store(name=request.form.get('name'), address=request.form.get('address'), distance_km=float(request.form.get('distance') or 10), high_dock='high_dock' in request.form, small_gate='small_gate' in request.form, low_wires='low_wires' in request.form, user_id=current_user.id))
-        db.session.commit(); return redirect(url_for('add_store'))
+        db.session.commit()
+        return redirect(url_for('add_store'))
     return render_template('add_store.html')
 
 @app.route('/import_stores', methods=['POST'])
@@ -500,7 +613,8 @@ def import_stores():
                 if n and n!='nan' and not Store.query.filter_by(name=n).first():
                     def pb(v): return str(v).lower() in ['yes', 'y', 'true', '1']
                     db.session.add(Store(name=n, address=str(r.get('address', '')), distance_km=float(r.get('distance', 10)), high_dock=pb(r.get('high dock', False)), small_gate=pb(r.get('small gate', False)), low_wires=pb(r.get('low wires', False)), user_id=current_user.id))
-            db.session.commit(); flash('Imported.')
+            db.session.commit()
+            flash('Imported.')
         except Exception as e: flash(f'Import error: {str(e)}')
     return redirect(url_for('add_store'))
 
@@ -511,67 +625,29 @@ def export_stores():
     out = BytesIO(); pd.DataFrame(df).to_excel(out, index=False); out.seek(0)
     return send_file(out, download_name="stores.xlsx", as_attachment=True)
 
-# --- UTILS (Logs, Backups, Users, Events) ---
-@app.route('/clear_logs'); @login_required; @admin_required
-def clear_logs():
-    Schedule.query.filter(Schedule.status=='Completed').delete(); db.session.commit()
-    return redirect(url_for('reports'))
+@app.route('/settings')
+@login_required
+@admin_required
+def settings():
+    return render_template('settings.html')
 
-@app.route('/revert_trip/<int:id>'); @login_required
-def revert_trip(id):
-    t = db.session.get(Schedule, id)
-    if t:
-        if t.truck.trip_count > 0: t.truck.trip_count -= 1
-        if t.driver.trip_count > 0: t.driver.trip_count -= 1
-        db.session.delete(t); db.session.commit()
-    return redirect(url_for('reports'))
-
-@app.route('/users', methods=['GET', 'POST']); @login_required; @admin_required
-def users():
-    if request.method == 'POST':
-        if not User.query.filter_by(username=request.form.get('username')).first():
-            db.session.add(User(username=request.form.get('username'), password=generate_password_hash(request.form.get('password')), role=request.form.get('role'))); db.session.commit()
-    return render_template('users.html', users=User.query.all())
-
-@app.route('/delete_user/<int:id>', methods=['POST']); @login_required; @admin_required
-def delete_user(id):
-    if id!=current_user.id: db.session.delete(db.session.get(User, id)); db.session.commit()
-    return redirect(url_for('users'))
-
-@app.route('/settings'); @login_required; @admin_required
-def settings(): return render_template('settings.html')
-
-@app.route('/backup_db'); @login_required; @admin_required
+@app.route('/backup_db')
+@login_required
+@admin_required
 def backup_db():
     if os.path.exists(DB_PATH): return send_file(DB_PATH, as_attachment=True, download_name=f"backup.db")
     return redirect(url_for('settings'))
 
-@app.route('/restore_db', methods=['POST']); @login_required; @admin_required
+@app.route('/restore_db', methods=['POST'])
+@login_required
+@admin_required
 def restore_db():
     f = request.files.get('file')
-    if f: db.session.remove(); f.save(DB_PATH); flash('Restored')
+    if f: 
+        db.session.remove()
+        f.save(DB_PATH)
+        flash('Restored')
     return redirect(url_for('settings'))
-
-@app.route('/events'); @login_required
-def get_events():
-    ev = []
-    for s in Schedule.query.filter(Schedule.status != 'Completed').all():
-        link = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(WAREHOUSE_ADDRESS)}&destination={urllib.parse.quote(s.store.address)}"
-        ev.append({'title': f"{s.truck.name} ({s.driver.name if s.driver else 'No Driver'})", 'start': s.start_time.isoformat(), 'end': s.end_time.isoformat(), 'url': link, 'color': '#3788d8'})
-    return jsonify(ev)
-
-@app.route('/api/get_trips_by_date/<date_str>'); @login_required
-def get_trips_by_date(date_str):
-    try:
-        sd = datetime.strptime(date_str, '%Y-%m-%d').date()
-        trips = Schedule.query.join(Truck).filter(db.func.date(Schedule.start_time) == sd).order_by(Schedule.start_time.asc()).all()
-        res = []
-        for t in trips:
-            hr = t.start_time.hour
-            shift = "Morning" if 6 <= hr < 12 else "Afternoon" if 12 <= hr < 18 else "Overtime"
-            res.append({'id': t.id, 'trip_type': t.trip_type, 'shift': shift, 'truck': f"{t.truck.name} ({int(t.truck.capacity_tons)}P)", 'driver': t.driver.name if t.driver else '--', 'store': f"{t.store.name} - {t.store.address}", 'load': int(t.load_weight), 'status': t.status})
-        return jsonify({'status': 'success', 'data': res})
-    except Exception as e: return jsonify({'status': 'error', 'message': str(e)})
 
 if __name__ == '__main__':
     with app.app_context(): db.create_all()
