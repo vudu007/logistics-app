@@ -10,18 +10,19 @@ import urllib.parse
 import pandas as pd
 from io import BytesIO
 import random
+from sqlalchemy import inspect, text # Added for auto-migration logic
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'dev-key-secret-change-for-production'
+# IMPORTANT: On Render, set this via Environment Variable. Fallback provided for local.
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-secret')
 
-# --- DATABASE CONFIGURATION (Local vs Cloud) ---
+# --- DATABASE CONFIGURATION ---
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
-# Check if running on Render (Cloud) or Local
 database_url = os.environ.get('DATABASE_URL')
 
 if database_url:
-    # Fix Render's postgres URL format
+    # Fix Render's postgres URL format if needed
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
@@ -40,12 +41,12 @@ login_manager.login_view = 'login'
 # --- CONSTANTS ---
 WAREHOUSE_ADDRESS = "ATREOS DC 2 Oba Akran, 5 OBALUFON-LAGERE ROAD, LAGERE JUNCTION, beside CATHOLIC CHURCH, Oba Akran, Ikeja 101233, Lagos"
 
-# --- CONTEXT PROCESSOR (Fixes datetime error in HTML) ---
+# --- CONTEXT PROCESSOR ---
 @app.context_processor
 def inject_datetime():
     return {'datetime': datetime}
 
-# --- PERMISSION DECORATOR ---
+# --- PERMISSIONS ---
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -74,15 +75,13 @@ class Driver(db.Model):
 class Truck(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    capacity_tons = db.Column(db.Float, nullable=False, default=0.0) # Pallets
+    capacity_tons = db.Column(db.Float, nullable=False, default=0.0)
     trip_count = db.Column(db.Integer, default=0)
     status = db.Column(db.String(50), default='Active') 
     
-    # Dedicated Driver Link
     assigned_driver_id = db.Column(db.Integer, db.ForeignKey('driver.id'), nullable=True)
     assigned_driver = db.relationship('Driver', backref='trucks')
     
-    # Constraints
     is_low = db.Column(db.Boolean, default=False)
     is_large = db.Column(db.Boolean, default=False)
     is_tall = db.Column(db.Boolean, default=False)
@@ -95,7 +94,6 @@ class Store(db.Model):
     address = db.Column(db.String(200), nullable=False)
     distance_km = db.Column(db.Float, default=10.0)
     
-    # Constraints
     high_dock = db.Column(db.Boolean, default=False)
     small_gate = db.Column(db.Boolean, default=False)
     low_wires = db.Column(db.Boolean, default=False)
@@ -106,9 +104,9 @@ class Schedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     start_time = db.Column(db.DateTime, nullable=False)
     end_time = db.Column(db.DateTime, nullable=False)
-    load_weight = db.Column(db.Float, nullable=False, default=0.0) # Pallets
+    load_weight = db.Column(db.Float, nullable=False, default=0.0)
     status = db.Column(db.String(20), default='Scheduled')
-    trip_type = db.Column(db.String(50), default='Direct') # 'Direct' or 'Merged'
+    trip_type = db.Column(db.String(50), default='Direct')
     
     truck_id = db.Column(db.Integer, db.ForeignKey('truck.id'), nullable=False)
     store_id = db.Column(db.Integer, db.ForeignKey('store.id'), nullable=False)
@@ -130,6 +128,10 @@ class Maintenance(db.Model):
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))
+
+# --- IMPORTANT: CREATE TABLES ON STARTUP (For Render/Gunicorn) ---
+with app.app_context():
+    db.create_all()
 
 # --- HELPERS ---
 def check_compatibility(truck, store):
@@ -175,7 +177,6 @@ def register():
 def dashboard():
     trucks = Truck.query.all()
     stores = Store.query.all()
-    
     stats = {
         'truck_count': len(trucks),
         'available_trucks': Truck.query.filter_by(status='Active').count(),
@@ -194,7 +195,6 @@ def download_job_template():
     data = []
     for s in stores:
         data.append({'Store': s.name, 'Address': s.address, 'Pallets': ''})
-    
     df = pd.DataFrame(data)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -203,7 +203,6 @@ def download_job_template():
         worksheet.column_dimensions['A'].width = 30
         worksheet.column_dimensions['B'].width = 50
         worksheet.column_dimensions['C'].width = 15
-        
     output.seek(0)
     return send_file(output, download_name="bulk_job_template.xlsx", as_attachment=True)
 
@@ -217,9 +216,8 @@ def upload_job_manifest():
 
     try:
         df = pd.read_excel(file)
-        df = df.fillna(0) # Fix NaN errors
+        df = df.fillna(0)
         df.columns = df.columns.str.strip().str.lower()
-        
         if 'store' not in df.columns:
             flash("Error: Excel must have a column named 'Store'.")
             return redirect(url_for('schedule_truck'))
@@ -239,23 +237,16 @@ def upload_job_manifest():
 
             match = next((s for s in all_stores if s.name.lower() == excel_name), None)
             if match:
-                preview_jobs.append({
-                    'store_id': match.id,
-                    'store_name': match.name,
-                    'store_address': match.address,
-                    'volume': int(pallets)
-                })
+                preview_jobs.append({'store_id': match.id, 'store_name': match.name, 'store_address': match.address, 'volume': int(pallets)})
         
         if not preview_jobs:
-            flash("No matching stores found in database. Check spelling.")
+            flash("No matching stores found.")
             return redirect(url_for('schedule_truck'))
 
-        flash(f"Loaded {len(preview_jobs)} jobs from Excel. Please confirm.")
-        
+        flash(f"Loaded {len(preview_jobs)} jobs.")
         trucks = Truck.query.filter_by(status='Active').order_by(Truck.trip_count).all()
         stores = Store.query.all()
         active_drivers = Driver.query.filter_by(status='Active').count()
-        
         return render_template('schedule.html', trucks=trucks, stores=stores, drivers=active_drivers, preview_jobs=preview_jobs)
 
     except Exception as e:
@@ -268,6 +259,7 @@ def upload_job_manifest():
 def schedule_truck():
     trucks = Truck.query.filter_by(status='Active').order_by(Truck.trip_count).all()
     stores = Store.query.all()
+    active_drivers = Driver.query.filter_by(status='Active').order_by(Driver.trip_count).all()
     
     if request.method == 'POST':
         try:
@@ -323,7 +315,7 @@ def schedule_truck():
                             partials.append({'store': store, 'volume': remaining})
                             remaining = 0
 
-                # Partials Consolidation
+                # Partials
                 partials.sort(key=lambda x: x['store'].distance_km)
                 while partials:
                     base = partials[0]
@@ -373,7 +365,7 @@ def schedule_truck():
                     truck = suitable[0]
                 else:
                     truck = db.session.get(Truck, int(truck_id_input))
-                    if truck.status == 'Maintenance': flash("Truck is in Maintenance!"); return redirect(url_for('schedule_truck'))
+                    if truck.status == 'Maintenance': flash("Truck in Maintenance!"); return redirect(url_for('schedule_truck'))
                     if not check_compatibility(truck, store)[0]: flash("Constraint Error"); return redirect(url_for('schedule_truck'))
 
                 if load > truck.capacity_tons: flash("Overload!"); return redirect(url_for('schedule_truck'))
@@ -408,25 +400,11 @@ def export_report():
     for t in trips:
         hr = t.start_time.hour
         shift = "Morning" if 6 <= hr < 12 else "Afternoon" if 12 <= hr < 18 else "Overtime"
-        data.append({
-            'Store': t.store.name,
-            'Full Address': t.store.address,
-            'Date': t.start_time.strftime('%Y-%m-%d'),
-            'Shift': shift,
-            'Trip Type': t.trip_type,
-            'Truck': f"{t.truck.name}",
-            'Capacity (P)': int(t.truck.capacity_tons),
-            'Driver': t.driver.name if t.driver else '--',
-            'Load (Pallets)': int(t.load_weight),
-            'Status': t.status
-        })
-    df = pd.DataFrame(data)
-    out = BytesIO()
-    with pd.ExcelWriter(out, engine='openpyxl') as w: df.to_excel(w, index=False)
-    out.seek(0)
+        data.append({'Store': t.store.name, 'Full Address': t.store.address, 'Date': t.start_time.strftime('%Y-%m-%d'), 'Time': t.start_time.strftime('%H:%M'), 'Shift': shift, 'Trip Type': t.trip_type, 'Truck': f"{t.truck.name}", 'Capacity (P)': int(t.truck.capacity_tons), 'Driver': t.driver.name if t.driver else '--', 'Load (P)': int(t.load_weight), 'Status': t.status})
+    out = BytesIO(); pd.DataFrame(data).to_excel(out, index=False); out.seek(0)
     return send_file(out, download_name="trip_report.xlsx", as_attachment=True)
 
-# --- API FOR CALENDAR ---
+# --- API ---
 @app.route('/api/get_trips_by_date/<date_str>')
 @login_required
 def get_trips_by_date(date_str):
@@ -437,16 +415,7 @@ def get_trips_by_date(date_str):
         for t in trips:
             hr = t.start_time.hour
             shift = "Morning" if 6 <= hr < 12 else "Afternoon" if 12 <= hr < 18 else "Overtime"
-            res.append({
-                'id': t.id,
-                'trip_type': t.trip_type,
-                'shift': shift,
-                'truck': f"{t.truck.name} ({int(t.truck.capacity_tons)}P)",
-                'driver': t.driver.name if t.driver else '--',
-                'store': f"{t.store.name} - {t.store.address}",
-                'load': int(t.load_weight),
-                'status': t.status
-            })
+            res.append({'id': t.id, 'trip_type': t.trip_type, 'shift': shift, 'truck': f"{t.truck.name} ({int(t.truck.capacity_tons)}P)", 'driver': t.driver.name if t.driver else '--', 'store': f"{t.store.name} - {t.store.address}", 'load': int(t.load_weight), 'status': t.status})
         return jsonify({'status': 'success', 'data': res})
     except Exception as e: return jsonify({'status': 'error', 'message': str(e)})
 
