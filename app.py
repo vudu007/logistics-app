@@ -30,7 +30,7 @@ else:
     # --- LOCAL POSTGRESQL CONFIG ---
     # Replace 'YOUR_PASSWORD' with what you set during installation
     LOCAL_DB_USER = "postgres"
-    LOCAL_DB_PASS = "YOUR_PASSWORD"
+    LOCAL_DB_PASS = "postgres"
     LOCAL_DB_NAME = "logistics_db"
     
     app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{LOCAL_DB_USER}:{LOCAL_DB_PASS}@localhost/{LOCAL_DB_NAME}'
