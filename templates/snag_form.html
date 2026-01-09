@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+
+{% block title %}Submit Maintenance Snag{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 max-w-4xl">
+    <div class="mb-6">
+        <h2 class="text-3xl font-bold text-white mb-2">
+            <i class="fas fa-tools mr-2"></i>Submit Maintenance Snag
+        </h2>
+        <p class="text-slate-300">Report a maintenance issue at any store location</p>
+    </div>
+
+    <div class="card bg-white p-8">
+        <form method="POST" action="{{ url_for('snag.submit_snag') }}" enctype="multipart/form-data" id="snagForm">
+            
+            <!-- Area Manager Information -->
+            <div class="mb-6">
+                <h3 class="text-xl font-semibold mb-4 text-slate-800 border-b pb-2">
+                    <i class="fas fa-user-tie mr-2 text-amber-500"></i>Area Manager Information
+                </h3>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Full Name <span class="text-red-500">*</span>
+                        </label>
+                        <input type="text" 
+                               name="name_of_area_manager" 
+                               class="form-control w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent" 
+                               required>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Email Address <span class="text-red-500">*</span>
+                        </label>
+                        <input type="email" 
+                               name="email_address" 
+                               class="form-control w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent" 
+                               required>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Store Information -->
+            <div class="mb-6">
+                <h3 class="text-xl font-semibold mb-4 text-slate-800 border-b pb-2">
+                    <i class="fas fa-store mr-2 text-amber-500"></i>Store Information
+                </h3>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Store Name / Address <span class="text-red-500">*</span>
+                        </label>
+                        <select name="store_name_address" 
+                                id="storeSelect" 
+                                class="form-select w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500" 
+                                required>
+                            <option value="">-- Select Store --</option>
+                            {% for store in stores %}
+                                <option value="{{ store.full_name }}">{{ store.full_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Store Number / Code
+                        </label>
+                        <input type="text" 
+                               name="store_number_code" 
+                               class="form-control w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Snag Details -->
+            <div class="mb-6">
+                <h3 class="text-xl font-semibold mb-4 text-slate-800 border-b pb-2">
+                    <i class="fas fa-exclamation-triangle mr-2 text-amber-500"></i>Snag Details
+                </h3>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Date of Report <span class="text-red-500">*</span>
+                    </label>
+                    <input type="date" 
+                           name="date_of_report" 
+                           value="{{ datetime.now().strftime('%Y-%m-%d') }}"
+                           class="form-control w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent" 
+                           required>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Snag Title <span class="text-red-500">*</span>
+                    </label>
+                    <input type="text" 
+                           name="snag_title" 
+                           placeholder="Brief summary of the issue"
+                           class="form-control w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent" 
+                           required>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Category <span class="text-red-500">*</span>
+                        </label>
+                        <select name="snag_category" 
+                                id="categorySelect" 
+                                class="form-select w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500" 
+                                required>
+                            <option value="">-- Select Category --</option>
+                            {% for category in categories %}
+                                <option value="{{ category }}">{{ category }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Urgency Level <span class="text-red-500">*</span>
+                        </label>
+                        <select name="urgency_level" 
+                                class="form-select w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500" 
+                                required>
+                            <option value="">-- Select Urgency --</option>
+                            {% for level in urgency_levels %}
+                                <option value="{{ level }}">{{ level }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Describe the Issue <span class="text-red-500">*</span>
+                    </label>
+                    <textarea name="describe_issue" 
+                              rows="5" 
+                              placeholder="Provide detailed description of the maintenance issue..."
+                              class="form-control w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent" 
+                              required></textarea>
+                    <p class="text-sm text-gray-500 mt-1">Please be as detailed as possible to help us address the issue quickly</p>
+                </div>
+            </div>
+
+            <!-- Media Upload -->
+            <div class="mb-6">
+                <h3 class="text-xl font-semibold mb-4 text-slate-800 border-b pb-2">
+                    <i class="fas fa-camera mr-2 text-amber-500"></i>Media Attachments
+                </h3>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Upload Photo/Video (Optional)
+                    </label>
+                    <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-amber-500 transition">
+                        <input type="file" 
+                               name="media_file" 
+                               id="mediaFile"
+                               accept="image/*,video/*"
+                               class="hidden">
+                        <label for="mediaFile" class="cursor-pointer">
+                            <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-2"></i>
+                            <p class="text-gray-600">Click to upload or drag and drop</p>
+                            <p class="text-sm text-gray-500 mt-1">Images and videos (Max 50MB)</p>
+                        </label>
+                        <div id="filePreview" class="mt-4 hidden">
+                            <p class="text-sm font-medium text-green-600">
+                                <i class="fas fa-check-circle mr-1"></i>
+                                <span id="fileName"></span>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submit Buttons -->
+            <div class="flex justify-end space-x-4 mt-8 pt-6 border-t">
+                <a href="{{ url_for('snag.dashboard') }}" 
+                   class="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium">
+                    <i class="fas fa-times mr-2"></i>Cancel
+                </a>
+                <button type="submit" 
+                        class="px-6 py-3 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition font-medium shadow-lg">
+                    <i class="fas fa-paper-plane mr-2"></i>Submit Snag Report
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    // Initialize Tom Select for better dropdowns
+    document.addEventListener('DOMContentLoaded', function() {
+        if (typeof TomSelect !== 'undefined') {
+            new TomSelect('#storeSelect', {
+                create: false,
+                sortField: 'text',
+                placeholder: 'Search for store...'
+            });
+            
+            new TomSelect('#categorySelect', {
+                create: false,
+                sortField: 'text'
+            });
+        }
+        
+        // File upload preview
+        const fileInput = document.getElementById('mediaFile');
+        const filePreview = document.getElementById('filePreview');
+        const fileName = document.getElementById('fileName');
+        
+        fileInput.addEventListener('change', function(e) {
+            if (this.files && this.files[0]) {
+                fileName.textContent = this.files[0].name;
+                filePreview.classList.remove('hidden');
+            } else {
+                filePreview.classList.add('hidden');
+            }
+        });
+        
+        // Form validation
+        document.getElementById('snagForm').addEventListener('submit', function(e) {
+            const requiredFields = this.querySelectorAll('[required]');
+            let isValid = true;
+            
+            requiredFields.forEach(field => {
+                if (!field.value.trim()) {
+                    isValid = false;
+                    field.classList.add('border-red-500');
+                } else {
+                    field.classList.remove('border-red-500');
+                }
+            });
+            
+            if (!isValid) {
+                e.preventDefault();
+                alert('Please fill in all required fields marked with *');
+            }
+        });
+    });
+</script>
+{% endblock %}

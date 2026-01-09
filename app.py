@@ -1,5 +1,6 @@
 from flask import Flask, render_template, redirect, url_for, flash, request, session, jsonify, send_file
 from flask_sqlalchemy import SQLAlchemy
+from flask_mail import Mail
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from functools import wraps
@@ -33,7 +34,16 @@ else:
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# --- EMAIL CONFIGURATION ---
+app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
+app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
+app.config['MAIL_USE_TLS'] = os.environ.get('MAIL_USE_TLS', 'True') == 'True'
+app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
+app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER', 'noreply@logisticspro.com')
+
 db = SQLAlchemy(app)
+mail = Mail(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
@@ -116,6 +126,33 @@ class Maintenance(db.Model):
     notes = db.Column(db.String(200), nullable=True)
     truck_id = db.Column(db.Integer, db.ForeignKey('truck.id'), nullable=False)
     truck = db.relationship('Truck', backref='maintenance_logs')
+
+class Snag(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    snag_id = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    name_of_area_manager = db.Column(db.String(200), nullable=False)
+    email_address = db.Column(db.String(200), nullable=False)
+    store_name_address = db.Column(db.String(500), nullable=False, index=True)
+    store_number_code = db.Column(db.String(100), nullable=True)
+    date_of_report = db.Column(db.Date, nullable=False)
+    snag_title = db.Column(db.String(300), nullable=False)
+    snag_category = db.Column(db.String(100), nullable=False, index=True)
+    describe_issue = db.Column(db.Text, nullable=False)
+    urgency_level = db.Column(db.String(50), nullable=False, index=True)
+    score = db.Column(db.Integer, default=0)
+    current_status = db.Column(db.String(50), default='Pending', nullable=False, index=True)
+    latest_cost = db.Column(db.Float, default=0.0)
+    latest_payment_status = db.Column(db.String(50), default='Unpaid')
+    email_sent = db.Column(db.Boolean, default=False)
+    google_drive_media_link = db.Column(db.String(500), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user = db.relationship('User', backref='snags')
+    
+    # Additional tracking fields
+    notes = db.Column(db.Text, nullable=True)
+    resolved_date = db.Column(db.DateTime, nullable=True)
+    resolved_by = db.Column(db.String(200), nullable=True)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -626,6 +663,13 @@ def export_stores():
     df = pd.DataFrame([{'Name': s.name, 'Address': s.address} for s in Store.query.all()])
     out = BytesIO(); pd.DataFrame(df).to_excel(out, index=False); out.seek(0)
     return send_file(out, download_name="stores.xlsx", as_attachment=True)
+
+# --- REGISTER BLUEPRINTS ---
+try:
+    from blueprints.snag_tracking import snag_bp
+    app.register_blueprint(snag_bp)
+except Exception as e:
+    print(f"Warning: Could not register snag_tracking blueprint: {e}")
 
 if __name__ == '__main__':
     with app.app_context():
