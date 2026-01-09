@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+
+{% block title %}Snag Details - {{ snag.snag_id }}{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 max-w-6xl">
+    <!-- Header -->
+    <div class="mb-6">
+        <div class="flex justify-between items-center">
+            <div>
+                <h2 class="text-3xl font-bold text-white mb-2">
+                    <i class="fas fa-clipboard-check mr-2"></i>Snag Details
+                </h2>
+                <p class="text-slate-300">{{ snag.snag_id }}</p>
+            </div>
+            <a href="{{ url_for('snag.dashboard') }}" 
+               class="px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition">
+                <i class="fas fa-arrow-left mr-2"></i>Back to Dashboard
+            </a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Main Details -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Basic Information -->
+            <div class="card bg-white p-6">
+                <h3 class="text-xl font-bold mb-4 flex items-center border-b pb-3">
+                    <i class="fas fa-info-circle mr-2 text-amber-500"></i>
+                    Basic Information
+                </h3>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-sm font-semibold text-gray-600">Snag ID</label>
+                        <p class="text-lg font-mono">{{ snag.snag_id }}</p>
+                    </div>
+                    
+                    <div>
+                        <label class="text-sm font-semibold text-gray-600">Date Reported</label>
+                        <p class="text-lg">{{ snag.date_of_report.strftime('%d %B %Y') }}</p>
+                    </div>
+                    
+                    <div>
+                        <label class="text-sm font-semibold text-gray-600">Area Manager</label>
+                        <p class="text-lg">{{ snag.name_of_area_manager }}</p>
+                    </div>
+                    
+                    <div>
+                        <label class="text-sm font-semibold text-gray-600">Email</label>
+                        <p class="text-lg">
+                            <a href="mailto:{{ snag.email_address }}" class="text-blue-600 hover:underline">
+                                {{ snag.email_address }}
+                            </a>
+                        </p>
+                    </div>
+                    
+                    <div class="md:col-span-2">
+                        <label class="text-sm font-semibold text-gray-600">Store Location</label>
+                        <p class="text-lg">{{ snag.store_name_address }}</p>
+                        {% if snag.store_number_code %}
+                            <p class="text-sm text-gray-500">Code: {{ snag.store_number_code }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Snag Details -->
+            <div class="card bg-white p-6">
+                <h3 class="text-xl font-bold mb-4 flex items-center border-b pb-3">
+                    <i class="fas fa-exclamation-triangle mr-2 text-amber-500"></i>
+                    Snag Details
+                </h3>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="text-sm font-semibold text-gray-600">Title</label>
+                        <p class="text-xl font-medium">{{ snag.snag_title }}</p>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="text-sm font-semibold text-gray-600">Category</label>
+                            <p>
+                                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-blue-100 text-blue-800">
+                                    {{ snag.snag_category }}
+                                </span>
+                            </p>
+                        </div>
+                        
+                        <div>
+                            <label class="text-sm font-semibold text-gray-600">Urgency Level</label>
+                            <p>
+                                {% if snag.urgency_level == 'Critical' %}
+                                    <span class="px-3 py-1 text-sm font-semibold rounded-full bg-red-100 text-red-800">
+                                        <i class="fas fa-exclamation-circle mr-1"></i>Critical
+                                    </span>
+                                {% elif snag.urgency_level == 'High' %}
+                                    <span class="px-3 py-1 text-sm font-semibold rounded-full bg-orange-100 text-orange-800">
+                                        <i class="fas fa-arrow-up mr-1"></i>High
+                                    </span>
+                                {% elif snag.urgency_level == 'Medium' %}
+                                    <span class="px-3 py-1 text-sm font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                                        <i class="fas fa-minus mr-1"></i>Medium
+                                    </span>
+                                {% else %}
+                                    <span class="px-3 py-1 text-sm font-semibold rounded-full bg-green-100 text-green-800">
+                                        <i class="fas fa-arrow-down mr-1"></i>Low
+                                    </span>
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="text-sm font-semibold text-gray-600 block mb-2">Description</label>
+                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <p class="text-gray-700 whitespace-pre-line">{{ snag.describe_issue }}</p>
+                        </div>
+                    </div>
+                    
+                    {% if snag.google_drive_media_link %}
+                    <div>
+                        <label class="text-sm font-semibold text-gray-600 block mb-2">Media Attachments</label>
+                        <a href="{{ snag.google_drive_media_link }}" 
+                           target="_blank" 
+                           class="inline-flex items-center px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition">
+                            <i class="fas fa-image mr-2"></i>View Media on Google Drive
+                        </a>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Notes Section -->
+            <div class="card bg-white p-6">
+                <h3 class="text-xl font-bold mb-4 flex items-center border-b pb-3">
+                    <i class="fas fa-sticky-note mr-2 text-amber-500"></i>
+                    Notes & Comments
+                </h3>
+                
+                {% if snag.notes %}
+                    <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-4">
+                        <p class="text-gray-700 whitespace-pre-line text-sm">{{ snag.notes }}</p>
+                    </div>
+                {% else %}
+                    <p class="text-gray-500 italic mb-4">No notes yet</p>
+                {% endif %}
+                
+                <form method="POST" action="{{ url_for('snag.add_note', id=snag.id) }}">
+                    <div class="mb-3">
+                        <textarea name="note" 
+                                  rows="3" 
+                                  placeholder="Add a note or comment..."
+                                  class="form-control w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500" 
+                                  required></textarea>
+                    </div>
+                    <button type="submit" 
+                            class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+                        <i class="fas fa-plus mr-2"></i>Add Note
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="lg:col-span-1 space-y-6">
+            <!-- Status Card -->
+            <div class="card bg-white p-6">
+                <h3 class="text-lg font-bold mb-4 flex items-center border-b pb-3">
+                    <i class="fas fa-tasks mr-2 text-amber-500"></i>
+                    Status
+                </h3>
+                
+                <div class="mb-4">
+                    <label class="text-sm font-semibold text-gray-600 block mb-2">Current Status</label>
+                    <p class="text-lg">
+                        {% if snag.current_status == 'Resolved' %}
+                            <span class="px-3 py-2 text-sm font-semibold rounded-full bg-green-100 text-green-800">
+                                <i class="fas fa-check mr-1"></i>Resolved
+                            </span>
+                        {% elif snag.current_status == 'In Progress' %}
+                            <span class="px-3 py-2 text-sm font-semibold rounded-full bg-blue-100 text-blue-800">
+                                <i class="fas fa-spinner mr-1"></i>In Progress
+                            </span>
+                        {% elif snag.current_status == 'Closed' %}
+                            <span class="px-3 py-2 text-sm font-semibold rounded-full bg-gray-100 text-gray-800">
+                                <i class="fas fa-times mr-1"></i>Closed
+                            </span>
+                        {% else %}
+                            <span class="px-3 py-2 text-sm font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                                <i class="fas fa-clock mr-1"></i>Pending
+                            </span>
+                        {% endif %}
+                    </p>
+                </div>
+                
+                <form method="POST" action="{{ url_for('snag.update_status', id=snag.id) }}">
+                    <div class="mb-3">
+                        <label class="text-sm font-semibold text-gray-600 block mb-2">Update Status</label>
+                        <select name="status" class="form-select w-full mb-3">
+                            <option value="Pending" {% if snag.current_status == 'Pending' %}selected{% endif %}>Pending</option>
+                            <option value="In Progress" {% if snag.current_status == 'In Progress' %}selected{% endif %}>In Progress</option>
+                            <option value="Resolved" {% if snag.current_status == 'Resolved' %}selected{% endif %}>Resolved</option>
+                            <option value="Closed" {% if snag.current_status == 'Closed' %}selected{% endif %}>Closed</option>
+                        </select>
+                    </div>
+                    <button type="submit" 
+                            class="w-full px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition">
+                        <i class="fas fa-save mr-2"></i>Update Status
+                    </button>
+                </form>
+                
+                {% if snag.resolved_date %}
+                    <div class="mt-4 pt-4 border-t">
+                        <p class="text-sm text-gray-600">
+                            <i class="fas fa-check-circle text-green-500 mr-1"></i>
+                            Resolved on {{ snag.resolved_date.strftime('%d %b %Y at %H:%M') }}
+                        </p>
+                        {% if snag.resolved_by %}
+                            <p class="text-sm text-gray-600 mt-1">
+                                By: {{ snag.resolved_by }}
+                            </p>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            </div>
+
+            <!-- Cost Card -->
+            {% if current_user.role == 'Admin' %}
+            <div class="card bg-white p-6">
+                <h3 class="text-lg font-bold mb-4 flex items-center border-b pb-3">
+                    <i class="fas fa-money-bill-wave mr-2 text-amber-500"></i>
+                    Cost Information
+                </h3>
+                
+                <div class="mb-4">
+                    <label class="text-sm font-semibold text-gray-600 block mb-1">Current Cost</label>
+                    <p class="text-2xl font-bold text-gray-800">
+                        ₦{{ '{:,.2f}'.format(snag.latest_cost) }}
+                    </p>
+                    <p class="text-sm text-gray-500">
+                        Payment: 
+                        <span class="font-medium {% if snag.latest_payment_status == 'Paid' %}text-green-600{% else %}text-red-600{% endif %}">
+                            {{ snag.latest_payment_status }}
+                        </span>
+                    </p>
+                </div>
+                
+                <form method="POST" action="{{ url_for('snag.update_cost', id=snag.id) }}">
+                    <div class="mb-3">
+                        <label class="text-sm font-semibold text-gray-600 block mb-2">Update Cost</label>
+                        <input type="number" 
+                               name="cost" 
+                               step="0.01" 
+                               value="{{ snag.latest_cost }}"
+                               class="form-control w-full mb-3">
+                    </div>
+                    <div class="mb-3">
+                        <label class="text-sm font-semibold text-gray-600 block mb-2">Payment Status</label>
+                        <select name="payment_status" class="form-select w-full mb-3">
+                            <option value="Unpaid" {% if snag.latest_payment_status == 'Unpaid' %}selected{% endif %}>Unpaid</option>
+                            <option value="Partial" {% if snag.latest_payment_status == 'Partial' %}selected{% endif %}>Partial</option>
+                            <option value="Paid" {% if snag.latest_payment_status == 'Paid' %}selected{% endif %}>Paid</option>
+                        </select>
+                    </div>
+                    <button type="submit" 
+                            class="w-full px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition">
+                        <i class="fas fa-save mr-2"></i>Update Cost
+                    </button>
+                </form>
+            </div>
+            {% endif %}
+
+            <!-- Metadata Card -->
+            <div class="card bg-white p-6">
+                <h3 class="text-lg font-bold mb-4 flex items-center border-b pb-3">
+                    <i class="fas fa-database mr-2 text-amber-500"></i>
+                    Metadata
+                </h3>
+                
+                <div class="space-y-3 text-sm">
+                    <div>
+                        <label class="font-semibold text-gray-600">Score</label>
+                        <p class="text-gray-800">{{ snag.score }}</p>
+                    </div>
+                    <div>
+                        <label class="font-semibold text-gray-600">Email Notification</label>
+                        <p class="text-gray-800">
+                            {% if snag.email_sent %}
+                                <i class="fas fa-check-circle text-green-500 mr-1"></i>Sent
+                            {% else %}
+                                <i class="fas fa-times-circle text-red-500 mr-1"></i>Not Sent
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div>
+                        <label class="font-semibold text-gray-600">Created At</label>
+                        <p class="text-gray-800">{{ snag.timestamp.strftime('%d %b %Y %H:%M') }}</p>
+                    </div>
+                    <div>
+                        <label class="font-semibold text-gray-600">Submitted By</label>
+                        <p class="text-gray-800">{{ snag.user.username }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

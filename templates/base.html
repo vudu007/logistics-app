@@ -102,6 +102,14 @@
                     <i class="fas fa-wrench mr-3 w-5"></i> Maintenance
                 </a>
                 
+                <div class="mt-4 mb-2 px-6 text-xs font-bold text-amber-500 uppercase tracking-widest">Snag Tracking</div>
+                <a href="{{ url_for('snag.dashboard') }}" class="nav-item flex items-center px-6 py-3 {{ 'active' if request.endpoint == 'snag.dashboard' }}">
+                    <i class="fas fa-clipboard-list mr-3 w-5"></i> Snag Dashboard
+                </a>
+                <a href="{{ url_for('snag.submit_snag') }}" class="nav-item flex items-center px-6 py-3 {{ 'active' if request.endpoint == 'snag.submit_snag' }}">
+                    <i class="fas fa-plus-circle mr-3 w-5"></i> Report Snag
+                </a>
+                
                 {% if current_user.role == 'Admin' %}
                 <div class="mt-4 mb-2 px-6 text-xs font-bold text-amber-500 uppercase tracking-widest">Administration</div>
                 <a href="{{ url_for('users') }}" class="nav-item flex items-center px-6 py-3 {{ 'active' if request.endpoint == 'users' }}">
